@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.11-host-join-nudge',
+    VERSION: '0.2.12-offer-resend',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -1070,6 +1070,11 @@
       if (this.peers.has(peer.id)) {
         const existing = this.peers.get(peer.id);
         const stateNow = existing?.pc?.connectionState || '';
+        const t = now();
+        if (this.isHost && !existing?.open && existing?.pc?.localDescription?.type === 'offer' && t - (existing.lastOfferAt || 0) > 1200) {
+          existing.lastOfferAt = t;
+          this.signal.sendSignal(peer.id, 'offer', existing.pc.localDescription);
+        }
         const stillNegotiating = (now() - (existing?.createdAt || 0) < 8000)
           || stateNow === 'new'
           || stateNow === 'connecting'
@@ -1104,7 +1109,10 @@
         this.attachDataChannel(state, stateDc);
         pc.createOffer()
           .then(offer => pc.setLocalDescription(offer))
-          .then(() => this.signal.sendSignal(id, 'offer', pc.localDescription))
+          .then(() => {
+            state.lastOfferAt = now();
+            return this.signal.sendSignal(id, 'offer', pc.localDescription);
+          })
           .catch(err => this.game.toast(`Offer failed: ${err.message || err}`));
       }
       return state;
@@ -1146,6 +1154,10 @@
       const pc = peer.pc;
       try {
         if (type === 'offer') {
+          if (pc.signalingState === 'stable' && pc.remoteDescription?.type === 'offer' && pc.localDescription?.type === 'answer') {
+            this.signal.sendSignal(from, 'answer', pc.localDescription);
+            return;
+          }
           await pc.setRemoteDescription(new RTCSessionDescription(data));
           await this.flushPendingIce(peer);
           const answer = await pc.createAnswer();
