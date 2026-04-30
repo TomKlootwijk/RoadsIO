@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.2-lobby-overlay-aim',
+    VERSION: '0.2.3-reliable-room-sync',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -56,10 +56,11 @@
     BOOST_SHAKE: 1.25,
     SPLAT_SHAKE: 22,
     OWN_SPLAT_SHAKE: 30,
-    HOST_SNAPSHOT_HZ: 16,
+    HOST_SNAPSHOT_HZ: 12,
     CLIENT_INPUT_HZ: 30,
-    FULL_GRID_SECONDS: 4,
-    NET_BUFFER_LIMIT: 220000,
+    FULL_GRID_SECONDS: 5,
+    NET_SNAPSHOT_BUFFER_LIMIT: 90000,
+    NET_INPUT_BUFFER_LIMIT: 180000,
 
     ICE_SERVERS: [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -1003,7 +1004,7 @@
       };
       pc.ondatachannel = (ev) => this.attachDataChannel(state, ev.channel);
       if (makeOffer) {
-        const dc = pc.createDataChannel('roads-splash', { ordered: false, maxRetransmits: 0 });
+        const dc = pc.createDataChannel('roads-splash');
         this.attachDataChannel(state, dc);
         pc.createOffer()
           .then(offer => pc.setLocalDescription(offer))
@@ -1020,7 +1021,7 @@
         peer.open = true;
         this.emit('open', peer.id);
         if (!this.isHost) {
-          this.send(peer.id, { type: 'hello', id: this.game.myId, name: this.game.playerName });
+          this.game.sendClientHello(true);
         } else {
           this.send(peer.id, { type: 'host-hello', id: this.game.myId, room: this.game.roomCode });
           this.game.sendFullSnapshotTo(peer.id);
@@ -1067,7 +1068,8 @@
     send(id, msg) {
       const peer = this.peers.get(id);
       if (!peer?.dc || peer.dc.readyState !== 'open') return false;
-      if ((msg?.type === 'snapshot' || msg?.type === 'input' || msg?.type === 'event') && peer.dc.bufferedAmount > CONFIG.NET_BUFFER_LIMIT) return false;
+      if (msg?.type === 'snapshot' && peer.dc.bufferedAmount > CONFIG.NET_SNAPSHOT_BUFFER_LIMIT) return false;
+      if ((msg?.type === 'input' || msg?.type === 'event') && peer.dc.bufferedAmount > CONFIG.NET_INPUT_BUFFER_LIMIT) return false;
       try { peer.dc.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
     }
     broadcast(msg) {
@@ -1140,6 +1142,7 @@
       this.networkAttempt = 0;
       this.reconnectTimer = null;
       this.reconnecting = false;
+      this.lastClientHelloAt = 0;
       this.lobbyRooms = [];
       this.lobbyLoading = false;
       this.lastLobbyAt = 0;
@@ -1423,6 +1426,14 @@
         }).catch(() => {});
       } catch (_) {}
     }
+    sendClientHello(force = false) {
+      if (this.isHost || this.mode !== 'client' || !this.mesh) return;
+      const t = now();
+      if (!force && t - this.lastClientHelloAt < 900) return;
+      this.lastClientHelloAt = t;
+      this.mesh.broadcast({ type: 'hello', id: this.myId, name: this.playerName });
+      this.mesh.broadcast({ type: 'request-full' });
+    }
     scheduleClientReconnect() {
       if (this.isHost || this.mode !== 'client' || !this.roomCode || this.reconnectTimer || this.reconnecting) return;
       const room = this.roomCode;
@@ -1588,7 +1599,7 @@
       if (touch && this.mode !== 'menu') touch.classList.toggle('hidden', show);
       if (!show) return;
 
-      const count = this.players.size || 1;
+      const count = Math.max(1, Array.from(this.players.values()).filter(p => !p.isBot).length);
       const winnerName = this.winner?.name || 'Winner';
       $('lobbyRoomCode').textContent = this.roomCode || '---';
       $('lobbyPlayerCount').textContent = `${count} player${count === 1 ? '' : 's'} connected`;
@@ -1797,6 +1808,7 @@
         }
       }
       for (const id of Array.from(this.players.keys())) if (!seen.has(id)) this.players.delete(id);
+      if (this.mode === 'client' && !this.players.has(this.myId)) this.sendClientHello();
       if (msg.full && msg.grid) this.paint.applyFull(msg.grid);
       if (msg.deltas) this.paint.applyDeltas(msg.deltas);
       if (becameRoundOver && this.winner) {
@@ -1879,6 +1891,7 @@
     tickClient(dt) {
       const s = this.input.getState();
       const me = this.players.get(this.myId);
+      if (!me) this.sendClientHello();
       if (me && this.roundActive && !this.roundOver) {
         me.input = s;
         this.updatePlayer(me, dt);
