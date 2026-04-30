@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.1.1-client-prediction',
+    VERSION: '0.1.2-control-overpaint',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -27,6 +27,7 @@
     BASE_SPEED: 218,
     MAX_AREA_SPEED_BONUS: 72,
     ACCEL: 1300,
+    STEER_RESPONSE: 17,
     FRICTION: 7.8,
     BOOST_MULT: 1.55,
     BOOST_DRAIN: 0.44,
@@ -35,12 +36,13 @@
 
     PAINT_POWER: 470,
     CONVERT_POWER: 260,
+    OVERPAINT_CENTER: 0.7,
     TRAIL_DEPOSIT_STEP: 6,
-    COLLISION_PUSH: 0.22,
-    COLLISION_BOUNCE: 0.18,
+    COLLISION_PUSH: 0.12,
+    COLLISION_BOUNCE: 0.08,
     REINFORCE_POWER: 260,
-    HOST_SNAPSHOT_HZ: 14,
-    CLIENT_INPUT_HZ: 24,
+    HOST_SNAPSHOT_HZ: 22,
+    CLIENT_INPUT_HZ: 40,
     FULL_GRID_SECONDS: 4,
 
     ICE_SERVERS: [
@@ -312,7 +314,7 @@
         this.pointer.active = true;
         this.pointer.ox = this.pointer.x = e.clientX;
         this.pointer.oy = this.pointer.y = e.clientY;
-        this.canvas.setPointerCapture?.(e.pointerId);
+        try { this.canvas.setPointerCapture?.(e.pointerId); } catch (_) {}
         this.juice.unlock();
       };
       const moveDrag = (e) => {
@@ -326,10 +328,14 @@
 
       const startStick = (e) => {
         e.preventDefault();
+        const rect = this.stick.getBoundingClientRect();
         this.touchStick.active = true;
-        this.touchStick.ox = this.touchStick.x = e.clientX;
-        this.touchStick.oy = this.touchStick.y = e.clientY;
-        this.stick.setPointerCapture?.(e.pointerId);
+        this.touchStick.ox = rect.left + rect.width / 2;
+        this.touchStick.oy = rect.top + rect.height / 2;
+        this.touchStick.x = e.clientX;
+        this.touchStick.y = e.clientY;
+        try { this.stick.setPointerCapture?.(e.pointerId); } catch (_) {}
+        this.updateNub();
         this.juice.unlock();
       };
       const moveStick = (e) => {
@@ -362,6 +368,7 @@
     }
     getState() {
       let x = 0, y = 0;
+      let analog = 1;
       if (this.keys.has('arrowleft') || this.keys.has('a')) x -= 1;
       if (this.keys.has('arrowright') || this.keys.has('d')) x += 1;
       if (this.keys.has('arrowup') || this.keys.has('w')) y -= 1;
@@ -372,12 +379,13 @@
         if (source.active) {
           x = source.x - source.ox;
           y = source.y - source.oy;
+          analog = clamp(Math.hypot(x, y) / (this.touchStick.active ? 46 : 72), 0, 1);
         }
       }
       const n = normalize(x, y);
       const state = {
-        x: n.x,
-        y: n.y,
+        x: n.x * analog,
+        y: n.y * analog,
         boost: this.boostDown || this.keys.has(' ') || this.keys.has('spacebar') || this.keys.has('shift')
       };
       this.lastState = state;
@@ -495,8 +503,12 @@
             }
           } else {
             const next = this.strength[i] - CONFIG.CONVERT_POWER * dt * falloff * powerScale;
-            if (next <= 0) {
-              this.setOwner(i, code, clamp(74 - next * 0.4, 72, 160));
+            const centeredStamp = falloff >= CONFIG.OVERPAINT_CENTER;
+            if (next <= 0 || centeredStamp) {
+              const strength = centeredStamp
+                ? 106 + (falloff - CONFIG.OVERPAINT_CENTER) * 250
+                : 74 - next * 0.4;
+              this.setOwner(i, code, clamp(strength, 86, 218));
               gained++;
             } else {
               this.strength[i] = next;
@@ -1462,14 +1474,15 @@
           if (firstNetworkState) {
             p.x = sp.x; p.y = sp.y; p.vx = sp.vx; p.vy = sp.vy;
           } else if (p.id === this.myId) {
-            const correction = dist2(p.x, p.y, sp.x, sp.y) > 220 * 220 ? 0.6 : 0.12;
+            const error = dist2(p.x, p.y, sp.x, sp.y);
+            const correction = error > 360 * 360 ? 0.42 : error > 32 * 32 ? 0.035 : 0.01;
             p.x = lerp(p.x, sp.x, correction);
             p.y = lerp(p.y, sp.y, correction);
-            p.vx = lerp(p.vx, sp.vx, 0.22);
-            p.vy = lerp(p.vy, sp.vy, 0.22);
+            p.vx = lerp(p.vx, sp.vx, 0.08);
+            p.vy = lerp(p.vy, sp.vy, 0.08);
           } else {
-            p.vx = lerp(p.vx, sp.vx, 0.28);
-            p.vy = lerp(p.vy, sp.vy, 0.28);
+            p.vx = lerp(p.vx, sp.vx, 0.2);
+            p.vy = lerp(p.vy, sp.vy, 0.2);
           }
           p.r = sp.r; p.boost = sp.boost;
           p.alive = sp.alive; p.respawn = sp.respawn; p.isBot = sp.isBot; p.score = sp.score || 0;
@@ -1558,10 +1571,10 @@
     }
     smoothNetworkPlayer(p, dt) {
       if (p.targetX === undefined || !p.alive) return;
-      const age = clamp((performance.now() - (p.netSeenAt || performance.now())) / 1000, 0, 0.24);
-      const px = clamp(p.targetX + (p.targetVx || 0) * age * 0.62, p.r, CONFIG.WORLD_W - p.r);
-      const py = clamp(p.targetY + (p.targetVy || 0) * age * 0.62, p.r, CONFIG.WORLD_H - p.r);
-      const blend = 1 - Math.pow(0.00055, dt);
+      const age = clamp((performance.now() - (p.netSeenAt || performance.now())) / 1000, 0, 0.18);
+      const px = clamp(p.targetX + (p.targetVx || 0) * age * 0.72, p.r, CONFIG.WORLD_W - p.r);
+      const py = clamp(p.targetY + (p.targetVy || 0) * age * 0.72, p.r, CONFIG.WORLD_H - p.r);
+      const blend = 1 - Math.pow(0.00018, dt);
       p.x = lerp(p.x, px, blend);
       p.y = lerp(p.y, py, blend);
       p.vx = lerp(p.vx, p.targetVx || 0, blend);
@@ -1595,17 +1608,21 @@
 
       const beforeX = p.x;
       const beforeY = p.y;
-      p.vx += ix * CONFIG.ACCEL * dt * boostMul;
-      p.vy += iy * CONFIG.ACCEL * dt * boostMul;
-      const speed = Math.hypot(p.vx, p.vy);
       const max = p.maxSpeed * boostMul;
+      if (inputMag >= 0.08) {
+        const steer = 1 - Math.exp(-CONFIG.STEER_RESPONSE * dt);
+        p.vx = lerp(p.vx, ix * max, steer);
+        p.vy = lerp(p.vy, iy * max, steer);
+      } else {
+        const friction = Math.exp(-CONFIG.FRICTION * dt);
+        p.vx *= friction;
+        p.vy *= friction;
+      }
+      const speed = Math.hypot(p.vx, p.vy);
       if (speed > max) {
         p.vx = p.vx / speed * max;
         p.vy = p.vy / speed * max;
       }
-      const friction = Math.exp(-CONFIG.FRICTION * dt);
-      if (inputMag < 0.08) { p.vx *= friction; p.vy *= friction; }
-      else { p.vx *= Math.exp(-1.2 * dt); p.vy *= Math.exp(-1.2 * dt); }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       if (p.x < p.r) { p.x = p.r; p.vx = Math.abs(p.vx) * 0.45; }
