@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.6-document-touch-joystick',
+    VERSION: '0.2.7-round-paint-reset',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -1217,6 +1217,7 @@
       this.matchTime = CONFIG.ROUND_SECONDS;
       this.roundActive = false;
       this.roundOver = false;
+      this.roundId = 0;
       this.winner = null;
       this.roundOverTimer = 0;
       this.centerBanner = null;
@@ -1673,6 +1674,7 @@
       this.matchTime = CONFIG.ROUND_SECONDS;
       this.roundActive = false;
       this.roundOver = false;
+      this.roundId = 0;
       this.roundOverTimer = 0;
       this.winner = null;
       this.particles = [];
@@ -1681,6 +1683,7 @@
       this.paint.clear(false);
     }
     startRound() {
+      this.roundId = (this.roundId || 0) + 1;
       this.paint.clear(false);
       this.matchTime = CONFIG.ROUND_SECONDS;
       this.roundActive = true;
@@ -1874,6 +1877,7 @@
         t: Math.round(performance.now()),
         full,
         room: this.roomCode,
+        roundId: this.roundId,
         matchTime: Math.round(this.matchTime * 100) / 100,
         roundActive: this.roundActive,
         roundOver: this.roundOver,
@@ -1891,12 +1895,25 @@
         t: Math.round(performance.now()),
         full,
         room: this.roomCode,
+        roundId: this.roundId,
         grid,
         deltas
       };
     }
     applySnapshot(msg) {
+      const wasRoundActive = this.roundActive;
+      const wasRoundOver = this.roundOver;
+      const incomingRoundId = Number.isFinite(Number(msg.roundId)) ? Number(msg.roundId) : this.roundId;
+      const startsFreshRound = !!msg.roundActive && !msg.roundOver
+        && (incomingRoundId !== this.roundId || (!wasRoundActive && wasRoundOver));
+      if (startsFreshRound) {
+        this.paint.clear(true);
+        this.particles = [];
+        this.floaters = [];
+        this.shockwaves = [];
+      }
       const becameRoundOver = !this.roundOver && !!msg.roundOver;
+      this.roundId = incomingRoundId;
       this.matchTime = msg.matchTime ?? this.matchTime;
       this.roundActive = !!msg.roundActive;
       this.roundOver = !!msg.roundOver;
@@ -1956,6 +1973,10 @@
       this.hideModal();
     }
     applyPaintSnapshot(msg) {
+      const paintRoundId = Number.isFinite(Number(msg?.roundId)) ? Number(msg.roundId) : this.roundId;
+      if (paintRoundId < this.roundId) return;
+      if (paintRoundId > this.roundId && !msg?.full) return;
+      if (paintRoundId > this.roundId) this.roundId = paintRoundId;
       if (msg?.full && msg.grid) this.paint.applyFull(msg.grid);
       if (msg?.deltas) this.paint.applyDeltas(msg.deltas);
     }
