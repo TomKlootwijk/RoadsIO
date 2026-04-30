@@ -2,11 +2,11 @@
 
 ## Highest-impact next tasks
 
-1. **Verify the real signaling server schema**  
-   The client tries raw WebSocket and Socket.IO, but the exact server at `https://runevalesignaling.onrender.com` was not introspectable from this environment because it returned a cold/503 response. Open the browser console during Host/Join and confirm which events arrive.
+1. **Run two-device multiplayer QA**
+   The client now speaks the RuneVale HTTP signaling mailbox at `https://runevalesignaling.onrender.com`. Test GitHub Pages on two real devices and confirm the WebRTC DataChannel opens outside a single-browser local test.
 
-2. **Run two-device multiplayer QA**  
-   Test GitHub Pages URL on two different networks. If WebRTC fails on one network, add TURN.
+2. **Add TURN for strict networks**
+   Signaling is working, but some mobile/corporate NATs will still block direct WebRTC. Add TURN credentials to `ICE_SERVERS` before public playtests.
 
 3. **Add a tiny debug panel**  
    Show signaling mode, peer count, datachannel state, ping, last snapshot age, and delta size.
@@ -25,8 +25,8 @@
 - `src/styles.css`  
   HUD/menu/mobile layout.
 
-- `signaling-server/server.js`  
-  Optional compatible signaling server.
+- `C:\Users\Tom\Documents\CODEX Projects\RuneValeSignaling\server.js`
+  Shared HTTP-only signaling mailbox used by this and your other games.
 
 ## Configuration hotspots
 
@@ -42,6 +42,7 @@ FULL_GRID_SECONDS
 ICE_SERVERS
 SIGNALING_URL
 SIGNALING_MODE
+SIGNALING_CONTENT_HASH
 ```
 
 ## Suggested deploy sequence
@@ -52,7 +53,7 @@ SIGNALING_MODE
 4. Test on two devices on the same Wi-Fi.
 5. Test on two devices on different networks.
 6. If different-network WebRTC fails, add TURN credentials.
-7. If existing signaling server is incompatible, deploy `signaling-server/` to Render and update `SIGNALING_URL`.
+7. Keep `SIGNALING_CONTENT_HASH` in sync if incompatible client builds should not join each other.
 
 ## Suggested feature roadmap
 

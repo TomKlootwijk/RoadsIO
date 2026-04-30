@@ -55,13 +55,12 @@
 - Room-code hosting.
 - Existing signaling URL configured.
 - Render wake-up notification/modal.
-- Raw WebSocket signaling support.
-- Socket.IO fallback support.
+- RuneVale HTTP long-poll signaling support.
 - WebRTC DataChannel setup.
 - Host-authoritative simulation.
 - Client input packets.
 - Host snapshots and paint deltas.
-- Optional compatible signaling server included.
+- Host match and bots wait until signaling succeeds.
 
 ## Not yet implemented
 
@@ -102,6 +101,6 @@
 ### QA
 
 - Browser matrix testing.
-- Multiplayer testing against the exact existing signaling server schema.
+- Two-device multiplayer testing against the live signaling service.
 - Load testing for many rooms.
 - Automated tests.

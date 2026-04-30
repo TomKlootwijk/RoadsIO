@@ -9,7 +9,7 @@ Keep hosting free:
 - Real gameplay runs over browser-to-browser WebRTC DataChannels.
 - Bots and simulation are host-authoritative.
 
-## Why host-authoritative
+## Why Host-Authoritative
 
 The paint grid changes constantly. If every browser simulated independently, tiny timing differences would desync the map. This prototype uses one host as the source of truth:
 
@@ -20,140 +20,101 @@ The paint grid changes constantly. If every browser simulated independently, tin
 
 This is simpler, cheaper, and good enough for casual friend rooms.
 
-## Data flow
+## Data Flow
 
 ```text
-Host browser      Signaling server      Client browser
-     |                   |                    |
-     | join ROOM         |                    |
-     |------------------>|                    |
-     |                   |       join ROOM    |
-     |                   |<-------------------|
-     | peer-joined       |                    |
-     |<------------------|                    |
-     | WebRTC offer      |                    |
-     |------------------>| WebRTC offer       |
-     |                   |------------------->|
-     |                   | WebRTC answer      |
-     | WebRTC answer     |<-------------------|
-     |<------------------|                    |
-     | ICE candidates    | ICE candidates     |
-     |<----------------->|<------------------>| 
-     |========== WebRTC DataChannel ==========>|
+Host browser      HTTP signaling       Client browser
+     |                 server               |
+     | POST /rooms       |                  |
+     |------------------>|                  |
+     | room code         |                  |
+     |<------------------|                  |
+     |                   | POST /join       |
+     |                   |<-----------------|
+     | long-poll join    |                  |
+     |<------------------|                  |
+     | POST offer        |                  |
+     |------------------>| long-poll offer  |
+     |                   |----------------->|
+     |                   | POST answer      |
+     | long-poll answer  |<-----------------|
+     |<------------------|                  |
+     | ICE via /signals  | ICE via /signals |
+     |<----------------->|<---------------->|
+     |========== WebRTC DataChannel =======>|
 ```
 
 After the DataChannel opens, the signaling server is no longer in the gameplay path.
 
-## Expected raw WebSocket signaling protocol
+## RuneVale HTTP Signaling Protocol
 
-Client → server:
+The client uses the HTTP-only RuneValeSignaling service. It is a temporary mailbox for WebRTC negotiation, not a gameplay relay.
 
-```json
-{ "type": "join", "room": "ABCDE", "id": "player-id", "name": "Painter" }
-```
-
-Server → joining client:
+Host creates a room:
 
 ```json
-{ "type": "welcome", "room": "ABCDE", "id": "player-id", "peers": [{ "id": "host-id", "name": "Host" }] }
-```
-
-Server → existing peers:
-
-```json
-{ "type": "peer-joined", "room": "ABCDE", "id": "new-player-id", "name": "Painter" }
-```
-
-Client → server signal forwarding:
-
-```json
+POST /rooms
 {
-  "type": "signal",
-  "room": "ABCDE",
-  "from": "host-id",
-  "to": "client-id",
-  "signal": { "type": "offer", "data": { "type": "offer", "sdp": "..." } }
+  "hostPeerId": "host-id",
+  "maxPeers": 8,
+  "gameVersion": "0.1.0-prototype",
+  "contentHash": "paint-rush-io-v1"
 }
 ```
 
-Server → target peer:
+Client joins a room:
 
 ```json
+POST /rooms/ABC123/join
 {
-  "type": "signal",
-  "room": "ABCDE",
-  "from": "host-id",
-  "to": "client-id",
-  "signal": { "type": "offer", "data": { "type": "offer", "sdp": "..." } }
+  "peerId": "client-id",
+  "displayName": "Painter",
+  "gameVersion": "0.1.0-prototype",
+  "contentHash": "paint-rush-io-v1"
 }
 ```
 
-Signal types are:
+Peers publish SDP/ICE messages:
 
+```json
+POST /rooms/ABC123/signals
+{
+  "from": "host-id",
+  "to": "client-id",
+  "kind": "offer",
+  "payload": { "type": "offer", "sdp": "..." }
+}
+```
+
+Peers long-poll for messages:
+
+```text
+GET /rooms/ABC123/signals?peerId=client-id&since=12&timeoutMs=25000
+```
+
+Signal kinds used by Paint Rush:
+
+- `join`
 - `offer`
 - `answer`
 - `ice`
+- `bye`
 
-## Compatibility with your existing Render server
+## Configuration
 
 The client defaults to:
 
 ```js
 SIGNALING_URL: 'https://runevalesignaling.onrender.com'
-SIGNALING_MODE: 'auto'
+SIGNALING_MODE: 'http'
+SIGNALING_CONTENT_HASH: 'paint-rush-io-v1'
 ```
 
-`auto` tries:
+The server lives at `C:\Users\Tom\Documents\CODEX Projects\RuneValeSignaling` during local development and exposes `/healthz`, `/rooms`, `/rooms/:roomCode/join`, and `/rooms/:roomCode/signals`.
 
-1. raw WebSocket at `/`, `/ws`, and `/signaling`, then
-2. Socket.IO fallback loaded from CDN.
-
-The client listens to several common event names:
-
-- `welcome`
-- `peers`
-- `peer-joined`
-- `user-joined`
-- `user-connected`
-- `signal`
-- `offer`
-- `answer`
-- `candidate`
-- `ice-candidate`
-
-If your existing signaling server uses a very different schema, deploy the included compatible server or adjust `FlexibleSignal` in `src/game.js`.
-
-## Included fallback signaling server
-
-The folder `signaling-server/` contains a compatible Node server using the `ws` package.
-
-Local test:
-
-```bash
-cd signaling-server
-npm install
-npm start
-```
-
-Then set in `src/game.js`:
-
-```js
-SIGNALING_URL: 'http://localhost:3000'
-SIGNALING_MODE: 'websocket'
-```
-
-Render deploy:
-
-- Use `signaling-server` as the service root.
-- Build command: `npm install`.
-- Start command: `npm start`.
-- Health check path: `/health`.
-
-A `render.yaml` is included.
-
-## Known networking limitations
+## Known Networking Limitations
 
 - No TURN server is included. Some strict NAT/mobile networks may fail peer-to-peer WebRTC. Add a TURN provider for reliability.
 - The host is authoritative, so if the host leaves, the room ends. Host migration is not implemented.
 - Snapshots are JSON for readability. For larger rooms, switch paint deltas to binary packets.
-- The Socket.IO fallback is best-effort because signaling servers often use custom event names.
+- The signaling mailbox is intentionally not a gameplay relay. If WebRTC cannot connect on a strict network, add TURN rather than sending gameplay through signaling.

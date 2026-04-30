@@ -4,16 +4,15 @@
   /**
    * Paint Rush.io
    * A tiny canvas/WebRTC territory game. It is intentionally dependency-free for
-   * GitHub Pages. The only optional dependency is Socket.IO client, loaded from a
-   * CDN only when raw WebSocket signaling fails and CONFIG.SIGNALING_MODE === 'auto'.
+   * GitHub Pages. Signaling uses the RuneVale HTTP long-poll room mailbox only
+   * to exchange WebRTC SDP/ICE messages; gameplay runs over DataChannels.
    */
 
   const CONFIG = {
     VERSION: '0.1.0-prototype',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
-    SIGNALING_MODE: 'auto', // auto | websocket | socketio
-    SIGNALING_SOCKETIO_CDN: 'https://cdn.socket.io/4.7.5/socket.io.min.js',
-    SIGNALING_EMIT_LEGACY_SOCKET_EVENTS: false,
+    SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
+    SIGNALING_CONTENT_HASH: 'paint-rush-io-v1',
 
     WORLD_W: 1680,
     WORLD_H: 1050,
@@ -72,12 +71,6 @@
     if (crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
     else for (let i = 0; i < bytes.length; i++) bytes[i] = (Math.random() * 255) | 0;
     return prefix + Array.from(bytes, b => b.toString(36).padStart(2, '0')).join('').slice(0, 10);
-  }
-  function makeRoomCode() {
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let out = '';
-    for (let i = 0; i < 5; i++) out += alphabet[(Math.random() * alphabet.length) | 0];
-    return out;
   }
   function safeName(raw, fallback = 'Painter') {
     const s = String(raw || '').replace(/[^\p{L}\p{N}_ .-]/gu, '').trim().slice(0, 16);
@@ -535,50 +528,40 @@
       this.id = id;
       this.name = name;
       this.room = null;
-      this.ws = null;
-      this.socket = null;
-      this.mode = null;
+      this.hostPeerId = null;
+      this.mode = 'http';
       this.connected = false;
       this.toasts = toasts;
       this.status = 'idle';
       this.cancelled = false;
+      this.cursor = 0;
+      this.polling = false;
+      this.pollAbort = null;
     }
-    async connect(room) {
-      this.room = room;
+    async connect(room, isHost = false) {
+      this.room = room ? String(room).toUpperCase() : null;
       this.cancelled = false;
-      this.emit('status', { title: 'Connecting…', text: 'Opening the signaling channel.', details: '' });
+      this.emit('status', { title: 'Connecting…', text: 'Opening the HTTP signaling mailbox.', details: '' });
       const wakeTimer = setTimeout(() => {
         if (!this.connected && !this.cancelled) {
           this.emit('status', {
             title: 'Waking signaling server…',
             text: 'This Render free server may have spun down. It usually wakes after the first request.',
-            details: 'Keep this tab open. Multiplayer starts once the signaling server accepts a WebSocket connection.'
+            details: 'Keep this tab open. Multiplayer starts once the signaling mailbox responds.'
           });
         }
       }, 1800);
       try {
         this.wakeSignalingServer();
-        if (CONFIG.SIGNALING_MODE === 'websocket' || CONFIG.SIGNALING_MODE === 'auto') {
-          try {
-            await this.connectWebSocket();
-            clearTimeout(wakeTimer);
-            return;
-          } catch (err) {
-            this.emit('status', {
-              title: 'Trying Socket.IO fallback…',
-              text: 'Raw WebSocket did not complete. Checking whether the signaling server uses Socket.IO.',
-              details: String(err.message || err)
-            });
-            if (CONFIG.SIGNALING_MODE === 'websocket') throw err;
-          }
-        }
-        await this.connectSocketIO();
+        if (isHost) await this.createHttpRoom();
+        else await this.joinHttpRoom(this.room);
         clearTimeout(wakeTimer);
+        return this.room;
       } catch (err) {
         clearTimeout(wakeTimer);
         this.emit('status', {
           title: 'Signaling failed',
-          text: 'Could not connect to the signaling server. You can still play solo with bots.',
+          text: 'Could not connect to the HTTP signaling server. You can still play solo with bots.',
           details: String(err.message || err)
         });
         throw err;
@@ -586,132 +569,126 @@
     }
     close() {
       this.cancelled = true;
-      try { this.ws?.close(); } catch (_) {}
-      try { this.socket?.disconnect(); } catch (_) {}
+      try { this.pollAbort?.abort(); } catch (_) {}
       this.connected = false;
-      this.ws = null;
-      this.socket = null;
-    }
-    websocketUrl(path = '') {
-      const base = this.url.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
-      return base + path;
+      this.polling = false;
+      this.pollAbort = null;
     }
     wakeSignalingServer() {
       if (!window.fetch) return;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 8000);
-      fetch(this.url + '/', { mode: 'no-cors', cache: 'no-store', signal: controller.signal })
+      fetch(this.url + '/healthz', { mode: 'cors', cache: 'no-store', signal: controller.signal })
         .catch(() => {})
         .finally(() => clearTimeout(timer));
     }
-    connectWebSocket() {
-      return new Promise((resolve, reject) => {
-        const paths = ['', '/ws', '/signaling'];
-        let attempt = 0;
-        let settled = false;
-        const deadline = Date.now() + 70000;
-        let lastError = '';
-        const tryPath = () => {
-          if (settled) return;
-          if (this.cancelled) { reject(new Error('Connection cancelled.')); return; }
-          if (Date.now() > deadline) {
-            reject(new Error(`No raw WebSocket endpoint responded${lastError ? ` (${lastError})` : ''}.`));
-            return;
-          }
-          const path = paths[attempt++ % paths.length];
-          const url = this.websocketUrl(path);
-          let ws;
-          try { ws = new WebSocket(url); } catch (err) {
-            lastError = err.message || String(err);
-            setTimeout(tryPath, 900);
-            return;
-          }
-          let opened = false;
-          let movedOn = false;
-          const retry = (reason) => {
-            if (settled || movedOn) return;
-            movedOn = true;
-            lastError = reason || `WebSocket ${path || '/'} did not open`;
-            clearTimeout(timer);
-            try { ws.close(); } catch (_) {}
-            setTimeout(tryPath, 900);
-          };
-          const timer = setTimeout(() => {
-            if (!opened) retry(`Timed out opening ${path || '/'}`);
-          }, 9000);
-          ws.onopen = () => {
-            opened = true;
-            movedOn = true;
-            clearTimeout(timer);
-            this.ws = ws;
-            this.mode = 'websocket';
-            this.connected = true;
-            ws.onmessage = (ev) => this.handleSignalMessage(safeJson(ev.data));
-            ws.onclose = () => this.emit('disconnect', { reason: 'websocket closed' });
-            ws.onerror = () => this.emit('status', { title: 'Signaling hiccup', text: 'WebSocket reported an error.', details: '' });
-            this.sendRaw({ type: 'join', room: this.room, id: this.id, name: this.name });
-            this.sendRaw({ type: 'hello', room: this.room, id: this.id, name: this.name });
-            this.emit('status', { title: 'Connected', text: `Joined signaling room ${this.room}.`, details: `Mode: raw WebSocket${path || '/'}` });
-            if (!settled) { settled = true; resolve(); }
-          };
-          ws.onerror = () => {
-            if (!opened) retry(`Error opening ${path || '/'}`);
-          };
-          ws.onclose = () => {
-            if (!opened) retry(`Closed before opening ${path || '/'}`);
-          };
-        };
-        tryPath();
+    async createHttpRoom() {
+      const data = await this.fetchJson('/rooms', {
+        method: 'POST',
+        body: {
+          hostPeerId: this.id,
+          maxPeers: Math.min(8, CONFIG.MAX_PLAYERS),
+          gameVersion: CONFIG.VERSION,
+          contentHash: CONFIG.SIGNALING_CONTENT_HASH
+        }
       });
+      this.room = String(data.roomCode || '').toUpperCase();
+      if (!this.room) throw new Error('Signaling server did not return a room code.');
+      this.hostPeerId = this.id;
+      this.cursor = 0;
+      this.connected = true;
+      this.emit('status', { title: 'Connected', text: `Created signaling room ${this.room}.`, details: 'Mode: HTTP long-poll mailbox' });
     }
-    async connectSocketIO() {
-      await loadScriptOnce(CONFIG.SIGNALING_SOCKETIO_CDN, 'socket.io-client');
-      if (!window.io) throw new Error('Socket.IO client did not load.');
-      return new Promise((resolve, reject) => {
-        const socket = window.io(this.url, {
-          transports: ['websocket', 'polling'],
-          reconnectionAttempts: 4,
-          timeout: 65000
-        });
-        this.socket = socket;
-        this.mode = 'socketio';
-        const timeout = setTimeout(() => reject(new Error('Socket.IO connection timed out.')), 70000);
-        socket.on('connect', () => {
-          clearTimeout(timeout);
-          this.connected = true;
-          socket.emit('join', { room: this.room, id: this.id, name: this.name });
-          socket.emit('join-room', this.room, this.id, this.name);
-          socket.emit('joinRoom', { room: this.room, id: this.id, name: this.name });
-          this.emit('status', { title: 'Connected', text: `Joined signaling room ${this.room}.`, details: 'Mode: Socket.IO fallback' });
-          resolve();
-        });
-        socket.on('disconnect', (reason) => this.emit('disconnect', { reason }));
-        socket.on('connect_error', (err) => this.emit('status', { title: 'Signaling connecting…', text: 'Socket.IO is still trying.', details: err.message || String(err) }));
-        const names = ['welcome','joined','peers','peer-joined','peerJoined','user-joined','user-connected','peer-left','user-left','signal','offer','answer','ice','candidate','ice-candidate'];
-        names.forEach(name => socket.on(name, (...args) => this.handleSocketEvent(name, args)));
+    async joinHttpRoom(room) {
+      if (!room) throw new Error('Room code required.');
+      const data = await this.fetchJson(`/rooms/${encodeURIComponent(room)}/join`, {
+        method: 'POST',
+        body: {
+          peerId: this.id,
+          displayName: this.name,
+          gameVersion: CONFIG.VERSION,
+          contentHash: CONFIG.SIGNALING_CONTENT_HASH
+        }
       });
+      this.room = String(data.roomCode || room).toUpperCase();
+      this.hostPeerId = data.hostPeerId || null;
+      this.cursor = Number(data.messageCursor || 0);
+      this.connected = true;
+      this.emit('status', { title: 'Connected', text: `Joined signaling room ${this.room}.`, details: 'Mode: HTTP long-poll mailbox' });
     }
-    handleSocketEvent(event, args) {
-      if (event === 'offer' || event === 'answer' || event === 'candidate' || event === 'ice' || event === 'ice-candidate') {
-        const payload = args[0] || {};
-        this.handleSignalMessage({ type: event, ...payload });
-      } else {
-        this.handleSignalMessage(args[0]);
+    async fetchJson(path, options = {}) {
+      const init = {
+        method: options.method || 'GET',
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: options.signal
+      };
+      if (options.body !== undefined) {
+        init.headers['Content-Type'] = 'application/json';
+        init.body = JSON.stringify(options.body);
       }
+      const res = await fetch(this.url + path, init);
+      let data = null;
+      try { data = await res.json(); } catch (_) {}
+      if (!res.ok || data?.ok === false) {
+        throw new Error(data?.error || `${res.status} ${res.statusText || 'signaling error'}`);
+      }
+      return data || {};
     }
-    sendRaw(obj) {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(obj));
+    startPolling() {
+      if (!this.connected || this.polling) return;
+      this.polling = true;
+      this.pollLoop();
+    }
+    async pollLoop() {
+      while (this.connected && !this.cancelled) {
+        this.pollAbort = new AbortController();
+        try {
+          const qs = `peerId=${encodeURIComponent(this.id)}&since=${encodeURIComponent(this.cursor)}&timeoutMs=25000`;
+          const data = await this.fetchJson(`/rooms/${encodeURIComponent(this.room)}/signals?${qs}`, { signal: this.pollAbort.signal });
+          if (Number.isFinite(Number(data.next))) this.cursor = Math.max(this.cursor, Number(data.next));
+          if (Array.isArray(data.messages)) {
+            for (const msg of data.messages) this.handleMailboxMessage(msg);
+          }
+        } catch (err) {
+          if (this.cancelled) break;
+          this.emit('status', {
+            title: 'Signaling reconnecting…',
+            text: 'The HTTP mailbox poll failed. Retrying.',
+            details: String(err.message || err)
+          });
+          await delay(1200);
+        } finally {
+          this.pollAbort = null;
+        }
+      }
+      this.polling = false;
     }
     sendSignal(to, signalType, data) {
-      const msg = { type: 'signal', room: this.room, from: this.id, to, signal: { type: signalType, data } };
-      if (this.mode === 'websocket') {
-        this.sendRaw(msg);
-      } else if (this.mode === 'socketio' && this.socket) {
-        this.socket.emit('signal', msg);
-        if (CONFIG.SIGNALING_EMIT_LEGACY_SOCKET_EVENTS) {
-          const ev = signalType === 'ice' ? 'ice-candidate' : signalType;
-          this.socket.emit(ev, { room: this.room, from: this.id, to, data });
-        }
+      if (!this.connected || !this.room) return Promise.resolve(false);
+      return this.fetchJson(`/rooms/${encodeURIComponent(this.room)}/signals`, {
+        method: 'POST',
+        body: { from: this.id, to, kind: signalType, payload: data }
+      })
+        .then(() => true)
+        .catch((err) => {
+          this.emit('status', { title: 'Signaling send failed', text: `Could not send ${signalType}.`, details: String(err.message || err) });
+          return false;
+        });
+    }
+    handleMailboxMessage(msg) {
+      if (!msg || msg.from === this.id) return;
+      const kind = msg.kind || msg.type;
+      const payload = parsePayload(msg.payload);
+      if (kind === 'join') {
+        const id = payload.peerId || msg.from;
+        if (id && id !== this.id) this.emit('peer', { id, name: payload.displayName || payload.name || 'Friend' });
+      } else if (kind === 'bye') {
+        if (msg.from) this.emit('peer-left', { id: msg.from });
+      } else if (kind === 'reject') {
+        this.emit('status', { title: 'Connection rejected', text: 'The host rejected the connection.', details: String(payload.reason || '') });
+      } else if (kind === 'offer' || kind === 'answer' || kind === 'ice') {
+        this.emit('signal', { from: msg.from, type: kind, data: payload });
       }
     }
     handleSignalMessage(msg) {
@@ -753,18 +730,12 @@
   function safeJson(data) {
     try { return JSON.parse(data); } catch (_) { return null; }
   }
-
-  function loadScriptOnce(src, key) {
-    return new Promise((resolve, reject) => {
-      if (document.querySelector(`script[data-key="${key}"]`)) { resolve(); return; }
-      const s = document.createElement('script');
-      s.src = src;
-      s.async = true;
-      s.dataset.key = key;
-      s.onload = resolve;
-      s.onerror = () => reject(new Error(`Failed to load ${src}`));
-      document.head.appendChild(s);
-    });
+  function parsePayload(data) {
+    if (typeof data !== 'string') return data || {};
+    try { return JSON.parse(data); } catch (_) { return data; }
+  }
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   class PeerMesh extends Emitter {
@@ -991,11 +962,11 @@
       this.closeNetwork();
       const attempt = ++this.networkAttempt;
       this.isHost = true;
-      this.roomCode = makeRoomCode();
+      this.roomCode = null;
       this.resetGame();
-      this.showModal('Connecting…', `Creating room ${this.roomCode} on the signaling server.`, 'The match and bots will start after signaling connects.');
+      this.showModal('Connecting…', 'Creating a room on the signaling server.', 'The match and bots will start after signaling connects.');
       try {
-        await this.openNetwork(this.roomCode, true);
+        await this.openNetwork(null, true);
         if (attempt !== this.networkAttempt) return;
         this.mode = 'host';
         this.isHost = true;
@@ -1025,7 +996,7 @@
         this.showModal(
           'Signaling unavailable',
           'Could not start a hosted room. No bots were started.',
-          `${String(err?.message || err)}\n\nCheck that the Render signaling service is deployed and accepts WebSocket connections.`,
+          `${String(err?.message || err)}\n\nCheck that the Render signaling service is deployed and its /healthz endpoint is healthy.`,
           'Back to menu'
         );
       }
@@ -1056,7 +1027,8 @@
     async openNetwork(room, isHost) {
       this.signal = new FlexibleSignal(CONFIG.SIGNALING_URL, this.myId, this.playerName, this.toasts);
       this.signal.on('status', (s) => this.updateModal(s.title, s.text, s.details));
-      await this.signal.connect(room);
+      const connectedRoom = await this.signal.connect(room, isHost);
+      this.roomCode = connectedRoom || this.signal.room || room;
       this.mesh = new PeerMesh(this, this.signal, isHost);
       this.mesh.on('message', ({ from, msg }) => this.onPeerMessage(from, msg));
       this.mesh.on('open', (id) => {
@@ -1068,6 +1040,7 @@
         if (isHost) this.removePlayer(id);
         this.updateNetStatus();
       });
+      this.signal.startPolling();
       this.updateNetStatus();
     }
     closeNetwork() {

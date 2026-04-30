@@ -59,8 +59,7 @@ Mobile:
 ```text
 index.html                    Static page shell
 src/styles.css                Responsive UI and HUD styling
-src/game.js                   Game, bots, rendering, WebRTC client
-signaling-server/             Optional compatible Node WebSocket signaling server
+src/game.js                   Game, bots, rendering, WebRTC and signaling client
 docs/CONCEPT.md               Game design concept
 docs/BALANCE.md               Current balance model and tuning knobs
 docs/NETWORKING.md            WebRTC/signaling architecture and protocol
@@ -70,7 +69,9 @@ docs/CODEX_HANDOFF.md         Practical next tasks for Codex or another engineer
 
 ## Current prototype status
 
-The local/bot game is fully playable. Multiplayer is implemented as host-authoritative WebRTC DataChannels, but your existing signaling server must support a compatible protocol. I added a flexible client that tries raw WebSocket first and Socket.IO fallback, plus an optional drop-in compatible server in `signaling-server/` if your existing server uses a different message schema.
+The local/bot game is fully playable. Multiplayer is implemented as host-authoritative WebRTC DataChannels. The signaling phase uses the existing RuneVale HTTP long-poll mailbox at `https://runevalesignaling.onrender.com` only to exchange room joins, WebRTC offers, answers, and ICE candidates.
+
+The signaling server does not carry gameplay packets. After the DataChannel opens, gameplay traffic is peer-to-peer between browsers.
 
 ## Changing the signaling URL
 
@@ -78,19 +79,10 @@ Edit `src/game.js` near the top:
 
 ```js
 SIGNALING_URL: 'https://runevalesignaling.onrender.com'
+SIGNALING_MODE: 'http'
 ```
 
-If your server is known to be raw WebSocket, set:
-
-```js
-SIGNALING_MODE: 'websocket'
-```
-
-If it is known to be Socket.IO, set:
-
-```js
-SIGNALING_MODE: 'socketio'
-```
+The expected server protocol is the HTTP-only RuneValeSignaling API documented in `docs/NETWORKING.md`.
 
 ## Performance notes
 
