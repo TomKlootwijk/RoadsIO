@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.12-offer-resend',
+    VERSION: '0.2.13-retry-stuck-join',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -1075,10 +1075,11 @@
           existing.lastOfferAt = t;
           this.signal.sendSignal(peer.id, 'offer', existing.pc.localDescription);
         }
-        const stillNegotiating = (now() - (existing?.createdAt || 0) < 8000)
+        const staleUnopened = this.isHost && !existing?.open && t - (existing?.createdAt || 0) > 10000;
+        const stillNegotiating = !staleUnopened && ((t - (existing?.createdAt || 0) < 8000)
           || stateNow === 'new'
           || stateNow === 'connecting'
-          || stateNow === 'connected';
+          || stateNow === 'connected');
         if (existing?.open || !this.isHost || stillNegotiating) return;
         this.removePeer(peer.id, true);
       }
