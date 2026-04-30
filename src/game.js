@@ -557,6 +557,7 @@
         }
       }, 1800);
       try {
+        this.wakeSignalingServer();
         if (CONFIG.SIGNALING_MODE === 'websocket' || CONFIG.SIGNALING_MODE === 'auto') {
           try {
             await this.connectWebSocket();
@@ -595,27 +596,52 @@
       const base = this.url.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
       return base + path;
     }
+    wakeSignalingServer() {
+      if (!window.fetch) return;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      fetch(this.url + '/', { mode: 'no-cors', cache: 'no-store', signal: controller.signal })
+        .catch(() => {})
+        .finally(() => clearTimeout(timer));
+    }
     connectWebSocket() {
       return new Promise((resolve, reject) => {
         const paths = ['', '/ws', '/signaling'];
         let attempt = 0;
         let settled = false;
+        const deadline = Date.now() + 70000;
+        let lastError = '';
         const tryPath = () => {
+          if (settled) return;
           if (this.cancelled) { reject(new Error('Connection cancelled.')); return; }
-          if (attempt >= paths.length) { reject(new Error('No raw WebSocket endpoint responded.')); return; }
-          const path = paths[attempt++];
+          if (Date.now() > deadline) {
+            reject(new Error(`No raw WebSocket endpoint responded${lastError ? ` (${lastError})` : ''}.`));
+            return;
+          }
+          const path = paths[attempt++ % paths.length];
           const url = this.websocketUrl(path);
           let ws;
-          try { ws = new WebSocket(url); } catch (err) { tryPath(); return; }
+          try { ws = new WebSocket(url); } catch (err) {
+            lastError = err.message || String(err);
+            setTimeout(tryPath, 900);
+            return;
+          }
           let opened = false;
+          let movedOn = false;
+          const retry = (reason) => {
+            if (settled || movedOn) return;
+            movedOn = true;
+            lastError = reason || `WebSocket ${path || '/'} did not open`;
+            clearTimeout(timer);
+            try { ws.close(); } catch (_) {}
+            setTimeout(tryPath, 900);
+          };
           const timer = setTimeout(() => {
-            if (!opened) {
-              try { ws.close(); } catch (_) {}
-              tryPath();
-            }
-          }, attempt === 1 ? 70000 : 10000);
+            if (!opened) retry(`Timed out opening ${path || '/'}`);
+          }, 9000);
           ws.onopen = () => {
             opened = true;
+            movedOn = true;
             clearTimeout(timer);
             this.ws = ws;
             this.mode = 'websocket';
@@ -629,13 +655,10 @@
             if (!settled) { settled = true; resolve(); }
           };
           ws.onerror = () => {
-            clearTimeout(timer);
-            try { ws.close(); } catch (_) {}
-            if (!opened) tryPath();
+            if (!opened) retry(`Error opening ${path || '/'}`);
           };
           ws.onclose = () => {
-            clearTimeout(timer);
-            if (!opened) tryPath();
+            if (!opened) retry(`Closed before opening ${path || '/'}`);
           };
         };
         tryPath();
@@ -890,6 +913,7 @@
 
       this.signal = null;
       this.mesh = null;
+      this.networkAttempt = 0;
 
       this.setupUi();
       this.resize();
@@ -965,23 +989,45 @@
     async startHost() {
       this.readMenuName();
       this.closeNetwork();
-      this.mode = 'host';
+      const attempt = ++this.networkAttempt;
       this.isHost = true;
       this.roomCode = makeRoomCode();
       this.resetGame();
-      this.createHuman(this.myId, this.playerName, CONFIG.COLORS[0]);
-      for (let i = 0; i < this.selectedBotCount(); i++) this.addBot();
-      this.startRound();
-      this.showGameUi();
-      this.showRoomBadge(this.roomCode);
-      this.showModal('Connecting…', 'Creating your room on the signaling server.', '');
+      this.showModal('Connecting…', `Creating room ${this.roomCode} on the signaling server.`, 'The match and bots will start after signaling connects.');
       try {
         await this.openNetwork(this.roomCode, true);
+        if (attempt !== this.networkAttempt) return;
+        this.mode = 'host';
+        this.isHost = true;
+        this.resetGame();
+        this.createHuman(this.myId, this.playerName, CONFIG.COLORS[0]);
+        for (let i = 0; i < this.selectedBotCount(); i++) this.addBot();
+        this.startRound();
+        this.showGameUi();
+        this.showRoomBadge(this.roomCode);
         this.hideModal();
         this.toast(`Room ${this.roomCode} is ready. Share the code with friends.`, 4200);
       } catch (err) {
-        this.toast('Multiplayer failed. You are still in a local game.');
-        this.hideModal();
+        if (attempt !== this.networkAttempt || /cancel/i.test(String(err?.message || err))) return;
+        this.closeNetwork();
+        this.mode = 'menu';
+        this.isHost = false;
+        this.roomCode = null;
+        this.players.clear();
+        this.bots.clear();
+        this.paint.clear(true);
+        this.hideRoomBadge();
+        $('menu').classList.remove('hidden');
+        $('hud').classList.add('hidden');
+        $('controls').classList.add('hidden');
+        $('minimap').classList.add('hidden');
+        $('touchControls').classList.add('hidden');
+        this.showModal(
+          'Signaling unavailable',
+          'Could not start a hosted room. No bots were started.',
+          `${String(err?.message || err)}\n\nCheck that the Render signaling service is deployed and accepts WebSocket connections.`,
+          'Back to menu'
+        );
       }
     }
     async joinRoom() {
@@ -1031,9 +1077,12 @@
       this.signal = null;
     }
     leaveToMenu(close = true) {
+      this.networkAttempt++;
       if (close) this.closeNetwork();
       this.mode = 'menu';
       this.isHost = false;
+      this.roomCode = null;
+      this.hostId = null;
       $('menu').classList.remove('hidden');
       $('hud').classList.add('hidden');
       $('controls').classList.add('hidden');
@@ -1060,8 +1109,9 @@
       el.querySelector('span').textContent = code;
     }
     hideRoomBadge() { $('roomBadge').classList.add('hidden'); }
-    showModal(title, text, details) {
+    showModal(title, text, details, cancelLabel = 'Cancel') {
       $('modal').classList.remove('hidden');
+      $('modalCancel').textContent = cancelLabel;
       this.updateModal(title, text, details);
     }
     updateModal(title, text, details = '') {
@@ -1069,7 +1119,10 @@
       $('modalText').textContent = text || '';
       $('modalDetails').textContent = details || '';
     }
-    hideModal() { $('modal').classList.add('hidden'); }
+    hideModal() {
+      $('modal').classList.add('hidden');
+      $('modalCancel').textContent = 'Cancel';
+    }
     toggleFullscreen() {
       if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
       else document.exitFullscreen?.();
