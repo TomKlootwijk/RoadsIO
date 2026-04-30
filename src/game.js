@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.10-no-live-full-grid',
+    VERSION: '0.2.11-host-join-nudge',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -1069,14 +1069,19 @@
       if (!peer.id || peer.id === this.signal.id) return;
       if (this.peers.has(peer.id)) {
         const existing = this.peers.get(peer.id);
-        if (existing?.open || !this.isHost) return;
+        const stateNow = existing?.pc?.connectionState || '';
+        const stillNegotiating = (now() - (existing?.createdAt || 0) < 8000)
+          || stateNow === 'new'
+          || stateNow === 'connecting'
+          || stateNow === 'connected';
+        if (existing?.open || !this.isHost || stillNegotiating) return;
         this.removePeer(peer.id, true);
       }
       if (this.isHost) this.createPeer(peer.id, true);
     }
     createPeer(id, makeOffer) {
       const pc = new RTCPeerConnection({ iceServers: CONFIG.ICE_SERVERS });
-      const state = { id, pc, dc: null, stateDc: null, open: false, openEmitted: false, lastInputAt: 0, pendingIce: [], disconnectTimer: null };
+      const state = { id, pc, dc: null, stateDc: null, open: false, openEmitted: false, lastInputAt: 0, pendingIce: [], disconnectTimer: null, createdAt: now() };
       this.peers.set(id, state);
       pc.onicecandidate = (ev) => { if (ev.candidate) this.signal.sendSignal(id, 'ice', ev.candidate); };
       pc.onconnectionstatechange = () => {
@@ -1241,6 +1246,8 @@
       this.accumPaintNet = 0;
       this.accumInput = 0;
       this.accumFullGrid = 0;
+      this.lastHostJoinNudgeAt = 0;
+      this.joinWaitStartedAt = 0;
       this.fps = 60;
       this.frameCounter = 0;
       this.netBytes = 0;
@@ -1478,6 +1485,8 @@
       this.mode = 'client';
       this.isHost = false;
       this.roomCode = code;
+      this.lastHostJoinNudgeAt = 0;
+      this.joinWaitStartedAt = now();
       this.players.clear();
       this.bots.clear();
       this.paint.clear(true);
@@ -1513,6 +1522,7 @@
         this.updateNetStatus();
       });
       this.signal.startPolling();
+      if (!isHost) this.nudgeHostJoin(true);
       this.updateNetStatus();
     }
     closeNetwork() {
@@ -1561,6 +1571,17 @@
       this.lastClientHelloAt = t;
       this.mesh.broadcast({ type: 'hello', id: this.myId, name: this.playerName });
       this.mesh.broadcast({ type: 'request-full' });
+    }
+    nudgeHostJoin(force = false) {
+      if (this.isHost || this.mode !== 'client' || !this.signal?.connected || !this.signal.hostPeerId) return;
+      const t = now();
+      if (!force && t - this.lastHostJoinNudgeAt < 1400) return;
+      this.lastHostJoinNudgeAt = t;
+      this.signal.sendSignal(this.signal.hostPeerId, 'join', {
+        peerId: this.myId,
+        displayName: this.playerName,
+        name: this.playerName
+      });
     }
     scheduleClientReconnect() {
       if (this.isHost || this.mode !== 'client' || !this.roomCode || this.reconnectTimer || this.reconnecting) return;
@@ -2091,6 +2112,7 @@
         if (p.id !== this.myId) this.smoothNetworkPlayer(p, dt);
       }
       if (this.mesh && this.mesh.countOpen() === 0 && this.mode === 'client') {
+        this.nudgeHostJoin();
         // Keep the modal friendly if WebRTC takes longer than signaling.
         this.updateModal('Waiting for host…', 'Signaling is connected. Waiting for the host to create the WebRTC data channel.', 'If this never changes, the signaling server protocol may differ from this prototype. See docs/NETWORKING.md.');
         $('modal').classList.remove('hidden');
