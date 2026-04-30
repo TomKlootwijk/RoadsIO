@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.5-mobile-input-reliable',
+    VERSION: '0.2.6-document-touch-joystick',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -341,7 +341,7 @@
       this.keys = new Set();
       this.pointer = { active: false, ox: 0, oy: 0, x: 0, y: 0 };
       this.pointerOriginProvider = null;
-      this.touchStick = { active: false, ox: 0, oy: 0, x: 0, y: 0, startedAt: 0, source: '', vectorUntil: 0 };
+      this.touchStick = { active: false, ox: 0, oy: 0, x: 0, y: 0, startedAt: 0, source: '', vectorUntil: 0, pointerId: null, touchId: null };
       this.boostDown = false;
       this.lastState = { x: 0, y: 0, boost: false };
       this.bind();
@@ -379,11 +379,13 @@
       this.canvas.addEventListener('pointerleave', endDrag);
       this.canvas.addEventListener('lostpointercapture', endDrag);
 
-      const startStickAt = (clientX, clientY, e = null, source = 'touch') => {
+      const startStickAt = (clientX, clientY, e = null, source = 'touch', touchId = null) => {
         e?.preventDefault?.();
         const rect = this.stick.getBoundingClientRect();
         this.touchStick.active = true;
         this.touchStick.source = source;
+        this.touchStick.touchId = touchId;
+        this.touchStick.pointerId = e?.pointerId ?? null;
         this.touchStick.ox = rect.left + rect.width / 2;
         this.touchStick.oy = rect.top + rect.height / 2;
         this.touchStick.x = clientX;
@@ -403,12 +405,15 @@
         this.updateNub();
       };
       const endStick = (e = null) => {
+        if (e?.type?.startsWith('pointer') && this.touchStick.source === 'touch' && this.touchStick.touchId != null) return;
         if (e?.type?.startsWith('mouse') && this.touchStick.source === 'touch') return;
         if (e?.type?.startsWith('touch') && this.touchStick.source === 'mouse') return;
         if (this.touchStick.active && e && performance.now() - this.touchStick.startedAt < 120) return;
         this.touchStick.active = false;
         this.touchStick.source = '';
         this.touchStick.vectorUntil = 0;
+        this.touchStick.touchId = null;
+        this.touchStick.pointerId = null;
         this.nub.style.transform = 'translate(0px, 0px)';
       };
       const startStick = (e) => startStickAt(e.clientX, e.clientY, e, e.pointerType === 'mouse' ? 'mouse' : 'touch');
@@ -417,7 +422,13 @@
         const root = this.stick.closest('.touch-controls');
         return !!root && !root.classList.contains('hidden') && getComputedStyle(root).display !== 'none';
       };
-      const inStickFallbackZone = (clientX, clientY) => clientX < Math.min(220, innerWidth * 0.55) && clientY > innerHeight * 0.45;
+      const inStickFallbackZone = (clientX, clientY) => {
+        const rect = this.stick.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const radius = Math.max(rect.width, rect.height) * 0.72;
+        return dist2(clientX, clientY, cx, cy) <= radius * radius;
+      };
       this.stick.addEventListener('pointerdown', startStick, { passive: false });
       this.nub.addEventListener('pointerdown', startStick, { passive: false });
       this.stick.addEventListener('pointermove', moveStick, { passive: false });
@@ -426,27 +437,42 @@
       window.addEventListener('pointerup', endStick);
       this.stick.addEventListener('touchstart', (e) => {
         const t = e.touches[0];
-        if (t) startStickAt(t.clientX, t.clientY, e, 'touch');
+        if (t) startStickAt(t.clientX, t.clientY, e, 'touch', t.identifier);
       }, { passive: false });
       this.nub.addEventListener('touchstart', (e) => {
         const t = e.touches[0];
-        if (t) startStickAt(t.clientX, t.clientY, e, 'touch');
+        if (t) startStickAt(t.clientX, t.clientY, e, 'touch', t.identifier);
       }, { passive: false });
-      window.addEventListener('touchstart', (e) => {
+      const trackedTouch = (touches) => {
+        if (this.touchStick.touchId == null) return touches[0] || null;
+        for (const t of touches) if (t.identifier === this.touchStick.touchId) return t;
+        return null;
+      };
+      document.addEventListener('touchstart', (e) => {
         if (this.touchStick.active || !touchControlsVisible()) return;
-        const t = e.touches[0];
-        if (t && inStickFallbackZone(t.clientX, t.clientY)) startStickAt(t.clientX, t.clientY, e, 'touch');
-      }, { passive: false });
-      window.addEventListener('touchmove', (e) => {
+        const t = trackedTouch(e.changedTouches);
+        if (t && inStickFallbackZone(t.clientX, t.clientY)) startStickAt(t.clientX, t.clientY, e, 'touch', t.identifier);
+      }, { passive: false, capture: true });
+      document.addEventListener('touchmove', (e) => {
         if (!this.touchStick.active && this.touchStick.vectorUntil <= performance.now()) return;
-        const t = e.touches[0];
+        const t = trackedTouch(e.touches);
         if (t) {
           e.preventDefault();
           moveStickAt(t.clientX, t.clientY);
         }
-      }, { passive: false });
-      window.addEventListener('touchend', endStick, { passive: true });
-      window.addEventListener('touchcancel', endStick, { passive: true });
+      }, { passive: false, capture: true });
+      const maybeEndTouch = (e) => {
+        if (this.touchStick.touchId == null) { endStick(e); return; }
+        for (const t of e.changedTouches) {
+          if (t.identifier === this.touchStick.touchId) {
+            this.touchStick.touchId = null;
+            endStick(e);
+            return;
+          }
+        }
+      };
+      document.addEventListener('touchend', maybeEndTouch, { passive: true, capture: true });
+      document.addEventListener('touchcancel', maybeEndTouch, { passive: true, capture: true });
       this.stick.addEventListener('mousedown', (e) => startStickAt(e.clientX, e.clientY, e, 'mouse'));
       this.nub.addEventListener('mousedown', (e) => startStickAt(e.clientX, e.clientY, e, 'mouse'));
       window.addEventListener('mousemove', (e) => { if (this.touchStick.active) moveStickAt(e.clientX, e.clientY); });
@@ -471,6 +497,10 @@
       this.keys.clear();
       this.pointer.active = false;
       this.touchStick.active = false;
+      this.touchStick.touchId = null;
+      this.touchStick.pointerId = null;
+      this.touchStick.source = '';
+      this.touchStick.vectorUntil = 0;
       this.boostDown = false;
       this.boostButton.classList.remove('down');
       this.nub.style.transform = 'translate(0px, 0px)';
