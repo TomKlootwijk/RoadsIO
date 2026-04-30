@@ -14,6 +14,7 @@
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: ui-rounded, Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 body { touch-action: none; user-select: none; }
 #game { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; background: radial-gradient(circle at 50% 25%, #20264a 0%, #101322 58%, #090b15 100%); }
+.touch-controls, .stick, .nub, .boost-btn { touch-action: none; user-select: none; -webkit-user-select: none; }
 .hidden { display: none !important; }
 .glass { background: var(--panel); border: 1px solid var(--stroke); box-shadow: var(--shadow); backdrop-filter: blur(14px) saturate(125%); -webkit-backdrop-filter: blur(14px) saturate(125%); }
 button, input, select { font: inherit; }

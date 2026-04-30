@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.4-split-network-channels',
+    VERSION: '0.2.5-mobile-input-reliable',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -341,7 +341,7 @@
       this.keys = new Set();
       this.pointer = { active: false, ox: 0, oy: 0, x: 0, y: 0 };
       this.pointerOriginProvider = null;
-      this.touchStick = { active: false, ox: 0, oy: 0, x: 0, y: 0, startedAt: 0 };
+      this.touchStick = { active: false, ox: 0, oy: 0, x: 0, y: 0, startedAt: 0, source: '', vectorUntil: 0 };
       this.boostDown = false;
       this.lastState = { x: 0, y: 0, boost: false };
       this.bind();
@@ -379,15 +379,17 @@
       this.canvas.addEventListener('pointerleave', endDrag);
       this.canvas.addEventListener('lostpointercapture', endDrag);
 
-      const startStickAt = (clientX, clientY, e = null) => {
+      const startStickAt = (clientX, clientY, e = null, source = 'touch') => {
         e?.preventDefault?.();
         const rect = this.stick.getBoundingClientRect();
         this.touchStick.active = true;
+        this.touchStick.source = source;
         this.touchStick.ox = rect.left + rect.width / 2;
         this.touchStick.oy = rect.top + rect.height / 2;
         this.touchStick.x = clientX;
         this.touchStick.y = clientY;
         this.touchStick.startedAt = performance.now();
+        this.touchStick.vectorUntil = performance.now() + 220;
         if (e?.pointerId !== undefined) {
           try { this.stick.setPointerCapture?.(e.pointerId); } catch (_) {}
         }
@@ -395,18 +397,22 @@
         this.juice.unlock();
       };
       const moveStickAt = (clientX, clientY) => {
-        if (!this.touchStick.active) return;
         this.touchStick.x = clientX;
         this.touchStick.y = clientY;
+        this.touchStick.vectorUntil = performance.now() + 220;
         this.updateNub();
       };
       const endStick = (e = null) => {
+        if (e?.type?.startsWith('mouse') && this.touchStick.source === 'touch') return;
+        if (e?.type?.startsWith('touch') && this.touchStick.source === 'mouse') return;
         if (this.touchStick.active && e && performance.now() - this.touchStick.startedAt < 120) return;
         this.touchStick.active = false;
+        this.touchStick.source = '';
+        this.touchStick.vectorUntil = 0;
         this.nub.style.transform = 'translate(0px, 0px)';
       };
-      const startStick = (e) => startStickAt(e.clientX, e.clientY, e);
-      const moveStick = (e) => moveStickAt(e.clientX, e.clientY);
+      const startStick = (e) => startStickAt(e.clientX, e.clientY, e, e.pointerType === 'mouse' ? 'mouse' : 'touch');
+      const moveStick = (e) => { if (this.touchStick.active) moveStickAt(e.clientX, e.clientY); };
       const touchControlsVisible = () => {
         const root = this.stick.closest('.touch-controls');
         return !!root && !root.classList.contains('hidden') && getComputedStyle(root).display !== 'none';
@@ -420,19 +426,19 @@
       window.addEventListener('pointerup', endStick);
       this.stick.addEventListener('touchstart', (e) => {
         const t = e.touches[0];
-        if (t) startStickAt(t.clientX, t.clientY, e);
+        if (t) startStickAt(t.clientX, t.clientY, e, 'touch');
       }, { passive: false });
       this.nub.addEventListener('touchstart', (e) => {
         const t = e.touches[0];
-        if (t) startStickAt(t.clientX, t.clientY, e);
+        if (t) startStickAt(t.clientX, t.clientY, e, 'touch');
       }, { passive: false });
       window.addEventListener('touchstart', (e) => {
         if (this.touchStick.active || !touchControlsVisible()) return;
         const t = e.touches[0];
-        if (t && inStickFallbackZone(t.clientX, t.clientY)) startStickAt(t.clientX, t.clientY, e);
+        if (t && inStickFallbackZone(t.clientX, t.clientY)) startStickAt(t.clientX, t.clientY, e, 'touch');
       }, { passive: false });
       window.addEventListener('touchmove', (e) => {
-        if (!this.touchStick.active) return;
+        if (!this.touchStick.active && this.touchStick.vectorUntil <= performance.now()) return;
         const t = e.touches[0];
         if (t) {
           e.preventDefault();
@@ -441,9 +447,9 @@
       }, { passive: false });
       window.addEventListener('touchend', endStick, { passive: true });
       window.addEventListener('touchcancel', endStick, { passive: true });
-      this.stick.addEventListener('mousedown', (e) => startStickAt(e.clientX, e.clientY, e));
-      this.nub.addEventListener('mousedown', (e) => startStickAt(e.clientX, e.clientY, e));
-      window.addEventListener('mousemove', (e) => moveStickAt(e.clientX, e.clientY));
+      this.stick.addEventListener('mousedown', (e) => startStickAt(e.clientX, e.clientY, e, 'mouse'));
+      this.nub.addEventListener('mousedown', (e) => startStickAt(e.clientX, e.clientY, e, 'mouse'));
+      window.addEventListener('mousemove', (e) => { if (this.touchStick.active) moveStickAt(e.clientX, e.clientY); });
       window.addEventListener('mouseup', endStick);
 
       const boostOn = (e) => { e.preventDefault(); this.boostDown = true; this.boostButton.classList.add('down'); this.juice.unlock(); };
@@ -495,12 +501,13 @@
       if (this.keys.has('arrowdown') || this.keys.has('s')) y += 1;
 
       if (Math.abs(x) < EPS && Math.abs(y) < EPS) {
-        const source = this.touchStick.active ? this.touchStick : this.pointer;
-        if (source.active) {
-          const origin = this.touchStick.active ? source : this.pointerOrigin();
+        const usingTouchStick = this.touchStick.active || this.touchStick.vectorUntil > performance.now();
+        const source = usingTouchStick ? this.touchStick : this.pointer;
+        if (usingTouchStick || source.active) {
+          const origin = usingTouchStick ? { x: source.ox, y: source.oy } : this.pointerOrigin();
           x = source.x - origin.x;
           y = source.y - origin.y;
-          analog = clamp(Math.hypot(x, y) / (this.touchStick.active ? 46 : 72), 0, 1);
+          analog = clamp(Math.hypot(x, y) / (usingTouchStick ? 46 : 72), 0, 1);
         }
       }
       const n = normalize(x, y);
@@ -2002,9 +2009,7 @@
       if (this.accumInput >= 1 / CONFIG.CLIENT_INPUT_HZ) {
         this.accumInput = 0;
         this.juice.boost(this.roundActive && !this.roundOver && s.boost && Math.hypot(s.x, s.y) > 0.1);
-        if (!this.mesh?.broadcast({ type: 'input', x: s.x, y: s.y, boost: s.boost }, 'state')) {
-          this.mesh?.broadcast({ type: 'input', x: s.x, y: s.y, boost: s.boost });
-        }
+        this.mesh?.broadcast({ type: 'input', x: s.x, y: s.y, boost: s.boost });
       }
       for (const p of this.players.values()) {
         if (p.id !== this.myId) this.smoothNetworkPlayer(p, dt);
