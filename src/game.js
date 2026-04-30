@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.13-retry-stuck-join',
+    VERSION: '0.2.14-round-restart-paint',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -1187,7 +1187,8 @@
     send(id, msg, channel = 'control') {
       const peer = this.peers.get(id);
       const useState = channel === 'state';
-      const dc = useState ? peer?.stateDc : peer?.dc;
+      let dc = useState ? peer?.stateDc : peer?.dc;
+      if (useState && (!dc || dc.readyState !== 'open') && msg?.type === 'paint' && !msg.full) dc = peer?.dc;
       if (!dc || dc.readyState !== 'open') return false;
       if ((msg?.type === 'paint' || msg?.type === 'snapshot') && dc.bufferedAmount > CONFIG.NET_SNAPSHOT_BUFFER_LIMIT) return false;
       if (msg?.type === 'input' && dc.bufferedAmount > CONFIG.NET_INPUT_BUFFER_LIMIT) return false;
@@ -1486,7 +1487,7 @@
         for (let i = 0; i < this.selectedBotCount(); i++) this.addBot();
       }
       this.startRound();
-      this.sendFullSnapshot();
+      this.sendRoundStartSnapshot();
       this.updateHostControls();
     }
     async joinRoom(codeOverride = null) {
@@ -1901,7 +1902,11 @@
     sendFullSnapshot() {
       if (!this.mesh) return;
       this.mesh.broadcast(this.buildSnapshot(true));
-      this.mesh.broadcast(this.buildPaintSnapshot(true), 'state');
+    }
+    sendRoundStartSnapshot() {
+      if (!this.mesh) return;
+      this.mesh.broadcast(this.buildSnapshot(true));
+      this.mesh.broadcast(this.buildPaintSnapshot(false), 'control');
     }
     broadcastEventSafe(event) {
       if (!this.mesh || !event || typeof event !== 'object') return;
@@ -2375,9 +2380,7 @@
       }
       if (this.accumPaintNet >= 1 / CONFIG.PAINT_SNAPSHOT_HZ) {
         this.accumPaintNet = 0;
-        const full = !this.roundActive && this.accumFullGrid >= CONFIG.FULL_GRID_SECONDS;
-        if (full) this.accumFullGrid = 0;
-        this.mesh.broadcast(this.buildPaintSnapshot(full), 'state');
+        this.mesh.broadcast(this.buildPaintSnapshot(false), 'state');
       }
     }
 
