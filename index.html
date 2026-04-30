@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+  <meta name="theme-color" content="#101322" />
+  <meta name="description" content="Paint Rush.io - a tiny WebRTC canvas territory game for casual friends and bots." />
+  <title>Paint Rush.io</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="src/styles.css" />
+</head>
+<body>
+  <canvas id="game" aria-label="Paint Rush.io game canvas"></canvas>
+
+  <div id="hud" class="hud hidden">
+    <div class="hud-left glass">
+      <div class="timer" id="timer">3:00</div>
+      <div class="subtitle" id="roundState">Paint the arena</div>
+      <div class="boost-wrap" aria-label="Boost meter"><div id="boostFill"></div></div>
+    </div>
+
+    <div class="hud-mid glass">
+      <div id="roomBadge" class="room-badge hidden">ROOM <span></span></div>
+      <div id="netStatus" class="net-status">Local</div>
+    </div>
+
+    <div class="hud-right glass">
+      <div class="score-title">Leaderboard</div>
+      <div id="leaderboard"></div>
+    </div>
+  </div>
+
+  <canvas id="minimap" class="minimap hidden" width="190" height="120" aria-label="Minimap"></canvas>
+
+  <div id="controls" class="controls hidden">
+    <button id="fullscreenBtn" class="round-btn" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+    <button id="soundBtn" class="round-btn" title="Sound" aria-label="Toggle sound">♪</button>
+    <button id="addBotBtn" class="round-btn host-only" title="Add bot" aria-label="Add bot">+🤖</button>
+    <button id="menuBtn" class="round-btn" title="Menu" aria-label="Back to menu">☰</button>
+  </div>
+
+  <div id="touchControls" class="touch-controls" aria-hidden="true">
+    <div id="stick" class="stick"><div id="nub" class="nub"></div></div>
+    <button id="boostBtn" class="boost-btn">BOOST</button>
+  </div>
+
+  <main id="menu" class="menu">
+    <section class="hero glass">
+      <div class="logo-row">
+        <div class="logo-blob"></div>
+        <div>
+          <h1>Paint Rush<span>.io</span></h1>
+          <p>Roll, splat, steal territory. Fast rounds for friends.</p>
+        </div>
+      </div>
+
+      <div class="field-grid">
+        <label>
+          Nickname
+          <input id="nameInput" maxlength="16" autocomplete="nickname" placeholder="Painter" />
+        </label>
+        <label>
+          Bots
+          <select id="botSelect">
+            <option value="0">0 bots</option>
+            <option value="2">2 bots</option>
+            <option value="4" selected>4 bots</option>
+            <option value="6">6 bots</option>
+            <option value="8">8 bots</option>
+          </select>
+        </label>
+        <label>
+          Quality
+          <select id="qualitySelect">
+            <option value="auto" selected>Auto / potato friendly</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="button-grid">
+        <button id="soloBtn" class="primary big">Solo with bots</button>
+        <button id="hostBtn" class="primary big">Host room</button>
+        <div class="join-row">
+          <input id="roomInput" maxlength="6" placeholder="ROOM" spellcheck="false" />
+          <button id="joinBtn" class="primary">Join</button>
+        </div>
+      </div>
+
+      <div class="hint-strip">
+        <span>Desktop: WASD / arrows + Space</span>
+        <span>Mobile: drag joystick + BOOST</span>
+      </div>
+    </section>
+
+    <section class="concept-card glass">
+      <h2>Core loop</h2>
+      <p>Every second is readable: your ball leaves paint, enemy paint slowly flips, territory grows your score and body, and bigger bodies are easier to ram.</p>
+      <ul>
+        <li><strong>Paint:</strong> roll over cells to claim them.</li>
+        <li><strong>Convert:</strong> enemy cells resist for a moment, so fights feel tactical.</li>
+        <li><strong>Boost:</strong> spend boost to steal, escape, or splat smaller balls.</li>
+        <li><strong>Win:</strong> own the most arena after three minutes.</li>
+      </ul>
+    </section>
+  </main>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card glass">
+      <div class="spinner"></div>
+      <h2 id="modalTitle">Connecting…</h2>
+      <p id="modalText">Preparing the room.</p>
+      <pre id="modalDetails"></pre>
+      <button id="modalCancel" class="ghost">Cancel</button>
+    </div>
+  </div>
+
+  <div id="toastRoot" class="toast-root" aria-live="polite"></div>
+
+  <script src="src/game.js"></script>
+</body>
+</html>
