@@ -92,6 +92,14 @@ label { display: grid; gap: 7px; color: #dce0ff; font-size: 13px; letter-spacing
 .room-flash-card div { color: var(--muted); text-transform: uppercase; letter-spacing: 0.16em; font-size: 14px; }
 .room-flash-card strong { display: block; margin-top: 6px; color: var(--warn); font-size: clamp(58px, 18vw, 120px); line-height: 0.9; letter-spacing: 0.14em; text-indent: 0.14em; }
 @keyframes roomFlash { 0% { opacity: 0; transform: scale(0.88); } 12%, 78% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.04); } }
+.room-lobby-overlay { position: fixed; inset: 0; z-index: 8; display: grid; place-items: center; pointer-events: none; padding: max(86px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(110px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+.room-lobby-card { pointer-events: auto; width: min(92vw, 460px); border-radius: 24px; padding: clamp(18px, 4vw, 28px); text-align: center; border-color: rgba(255,209,102,0.28); }
+.room-lobby-kicker { color: var(--muted); text-transform: uppercase; letter-spacing: 0.16em; font-size: 13px; font-weight: 800; }
+.room-lobby-code { margin-top: 8px; color: #dbe0ff; font-weight: 900; letter-spacing: 0.08em; }
+.room-lobby-code strong { display: inline-block; margin-left: 8px; color: var(--warn); font-size: clamp(48px, 13vw, 84px); line-height: 0.9; letter-spacing: 0.12em; text-indent: 0.12em; vertical-align: -0.06em; }
+.room-lobby-card p { margin: 14px auto 8px; max-width: 31rem; color: #eef1ff; font-size: clamp(16px, 3.2vw, 20px); font-weight: 850; line-height: 1.35; }
+.room-lobby-count { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+.room-lobby-card .primary { width: min(100%, 260px); min-height: 56px; margin-top: 2px; font-size: 18px; }
 .toast-root { position: fixed; left: 50%; top: max(16px, env(safe-area-inset-top)); transform: translateX(-50%); z-index: 20; display: grid; gap: 8px; pointer-events: none; width: min(92vw, 520px); }
 .toast { background: rgba(20,24,43,0.92); border: 1px solid rgba(255,255,255,0.13); border-radius: 16px; padding: 10px 14px; box-shadow: var(--shadow); color: var(--text); text-align: center; animation: toastIn 260ms ease both; }
 @keyframes toastIn { from { opacity: 0; transform: translateY(-8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }

@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.1-lobby-start-stability',
+    VERSION: '0.2.2-lobby-overlay-aim',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -338,10 +338,14 @@
       this.juice = juice;
       this.keys = new Set();
       this.pointer = { active: false, ox: 0, oy: 0, x: 0, y: 0 };
+      this.pointerOriginProvider = null;
       this.touchStick = { active: false, ox: 0, oy: 0, x: 0, y: 0 };
       this.boostDown = false;
       this.lastState = { x: 0, y: 0, boost: false };
       this.bind();
+    }
+    setPointerOriginProvider(fn) {
+      this.pointerOriginProvider = typeof fn === 'function' ? fn : null;
     }
     bind() {
       window.addEventListener('keydown', (e) => {
@@ -353,9 +357,12 @@
 
       const beginDrag = (e) => {
         if (e.pointerType === 'touch') return;
+        const origin = this.pointerOrigin();
         this.pointer.active = true;
-        this.pointer.ox = this.pointer.x = e.clientX;
-        this.pointer.oy = this.pointer.y = e.clientY;
+        this.pointer.ox = origin.x;
+        this.pointer.oy = origin.y;
+        this.pointer.x = e.clientX;
+        this.pointer.y = e.clientY;
         try { this.canvas.setPointerCapture?.(e.pointerId); } catch (_) {}
         this.juice.unlock();
       };
@@ -425,6 +432,14 @@
       const mag = Math.min(42, n.d);
       this.nub.style.transform = `translate(${n.x * mag}px, ${n.y * mag}px)`;
     }
+    pointerOrigin() {
+      if (!this.pointerOriginProvider) return { x: this.pointer.ox || innerWidth / 2, y: this.pointer.oy || innerHeight / 2 };
+      const point = this.pointerOriginProvider();
+      return {
+        x: Number.isFinite(point?.x) ? point.x : innerWidth / 2,
+        y: Number.isFinite(point?.y) ? point.y : innerHeight / 2
+      };
+    }
     getState() {
       let x = 0, y = 0;
       let analog = 1;
@@ -436,8 +451,9 @@
       if (Math.abs(x) < EPS && Math.abs(y) < EPS) {
         const source = this.touchStick.active ? this.touchStick : this.pointer;
         if (source.active) {
-          x = source.x - source.ox;
-          y = source.y - source.oy;
+          const origin = this.touchStick.active ? source : this.pointerOrigin();
+          x = source.x - origin.x;
+          y = source.y - origin.y;
           analog = clamp(Math.hypot(x, y) / (this.touchStick.active ? 46 : 72), 0, 1);
         }
       }
@@ -1086,6 +1102,7 @@
       this.toasts = new Toasts($('toastRoot'));
       this.juice = new Juice();
       this.input = new InputManager(this.canvas, $('boostBtn'), $('stick'), $('nub'), this.juice);
+      this.input.setPointerOriginProvider(() => this.getPlayerScreenPoint());
       this.paint = new PaintField();
 
       this.mode = 'menu';
@@ -1107,6 +1124,7 @@
       this.floaters = [];
       this.shockwaves = [];
       this.camera = { x: CONFIG.WORLD_W / 2, y: CONFIG.WORLD_H / 2, zoom: 1 };
+      this.view = null;
       this.quality = localStorage.getItem('paintRush.quality') || 'auto';
       this.pixelRatio = 1;
       this.lastTick = now();
@@ -1158,6 +1176,7 @@
       };
       $('soundBtn').textContent = this.juice.enabled ? '♪' : '×';
       $('startRoundBtn').onclick = () => this.startHostedRound();
+      $('lobbyStartBtn').onclick = () => this.startHostedRound();
       $('addBotBtn').onclick = () => this.addBotButton();
       $('menuBtn').onclick = () => this.leaveToMenu();
       $('qualitySelect').onchange = () => {
@@ -1211,6 +1230,15 @@
       return this.playerName;
     }
     selectedBotCount() { return clamp(parseInt($('botSelect').value || '4', 10) || 0, 0, CONFIG.MAX_BOTS); }
+    getPlayerScreenPoint() {
+      const p = this.players.get(this.myId) || Array.from(this.players.values())[0];
+      const view = this.view;
+      if (!p || !view) return { x: innerWidth / 2, y: innerHeight / 2 };
+      return {
+        x: (p.x * view.zoom + view.tx) / view.dpr,
+        y: (p.y * view.zoom + view.ty) / view.dpr
+      };
+    }
 
     async refreshLobby(force = false) {
       if (this.mode !== 'menu' || this.lobbyLoading) return;
@@ -1432,6 +1460,7 @@
       $('touchControls').classList.add('hidden');
       this.hideModal();
       this.hideRoomBadge();
+      this.hideRoomLobbyOverlay();
       this.players.clear();
       this.bots.clear();
       this.paint.clear(true);
@@ -1446,11 +1475,13 @@
       $('addBotBtn').classList.toggle('hidden', !this.isHost);
       this.updateHostControls();
       this.updateNetStatus();
+      this.updateRoomLobbyOverlay();
     }
     updateHostControls() {
       const start = $('startRoundBtn');
-      if (start) start.classList.toggle('hidden', !(this.isHost && this.mode === 'host' && (!this.roundActive || this.roundOver)));
+      if (start) start.classList.add('hidden');
       $('addBotBtn').classList.toggle('hidden', !(this.isHost && this.mode === 'host' && !this.roundActive));
+      this.updateRoomLobbyOverlay();
     }
     showRoomBadge(code) {
       const el = $('roomBadge');
@@ -1502,6 +1533,7 @@
       $('netStatus').textContent = text;
       if (this.roomCode && this.mode !== 'menu' && this.mode !== 'local') this.showRoomBadge(this.roomCode);
       else if (!this.roomCode || this.mode === 'local') this.hideRoomBadge();
+      this.updateRoomLobbyOverlay();
     }
 
     resetGame() {
@@ -1526,6 +1558,7 @@
       this.roundOverTimer = 0;
       this.winner = null;
       this.centerBanner = null;
+      this.hideRoomLobbyOverlay();
       let i = 0;
       for (const p of this.players.values()) {
         this.spawnPlayer(p, i++);
@@ -1540,13 +1573,39 @@
       this.updateHostControls();
     }
     showWaitingBanner() {
-      this.centerBanner = {
-        title: 'Room ready',
-        subtitle: this.isHost ? 'Press Start when everyone joins' : 'Waiting for host to start',
-        color: '#ffd166',
-        life: 999,
-        maxLife: 999
-      };
+      if (this.centerBanner?.title === 'Room ready') this.centerBanner = null;
+      this.updateRoomLobbyOverlay();
+    }
+    shouldShowRoomLobby() {
+      return this.mode !== 'menu' && this.mode !== 'local' && !!this.roomCode && !this.roundActive;
+    }
+    updateRoomLobbyOverlay() {
+      const overlay = $('roomLobbyOverlay');
+      if (!overlay) return;
+      const show = this.shouldShowRoomLobby();
+      overlay.classList.toggle('hidden', !show);
+      const touch = $('touchControls');
+      if (touch && this.mode !== 'menu') touch.classList.toggle('hidden', show);
+      if (!show) return;
+
+      const count = this.players.size || 1;
+      const winnerName = this.winner?.name || 'Winner';
+      $('lobbyRoomCode').textContent = this.roomCode || '---';
+      $('lobbyPlayerCount').textContent = `${count} player${count === 1 ? '' : 's'} connected`;
+      $('lobbyStartBtn').classList.toggle('hidden', !(this.isHost && this.mode === 'host'));
+      if (this.roundOver) {
+        $('lobbyRoomText').textContent = this.isHost
+          ? `${winnerName} wins. Start the next round when everyone is ready.`
+          : `${winnerName} wins. Waiting for the host to start the next round.`;
+      } else {
+        $('lobbyRoomText').textContent = this.isHost
+          ? 'Press Start when everyone has joined.'
+          : 'You are in the room. Waiting for the host to start.';
+      }
+    }
+    hideRoomLobbyOverlay() {
+      $('roomLobbyOverlay')?.classList.add('hidden');
+      if (this.mode !== 'menu') $('touchControls')?.classList.remove('hidden');
     }
     createHuman(id, name, color) {
       const p = this.makePlayer(id, name, color, false);
@@ -1745,8 +1804,12 @@
         this.juice.roundEnd();
       } else if (!this.roundActive && !this.roundOver && this.mode !== 'menu') {
         this.showWaitingBanner();
-      } else if (this.roundActive && !this.roundOver && this.centerBanner?.title === 'Room ready') {
+      }
+      if (this.roundActive && !this.roundOver) {
         this.centerBanner = null;
+        this.hideRoomLobbyOverlay();
+      } else {
+        this.updateRoomLobbyOverlay();
       }
       this.hideModal();
     }
@@ -2021,6 +2084,7 @@
       }
       this.sendFullSnapshot();
       this.updateHostControls();
+      this.updateRoomLobbyOverlay();
     }
     showRoundBanner(winner) {
       if (!winner) return;
@@ -2137,6 +2201,7 @@
       const sy = shake ? rand(-shake, shake) : 0;
       const tx = w / 2 - this.camera.x * this.camera.zoom + sx;
       const ty = h / 2 - this.camera.y * this.camera.zoom + sy;
+      this.view = { zoom: this.camera.zoom, tx, ty, dpr };
       ctx.setTransform(this.camera.zoom, 0, 0, this.camera.zoom, tx, ty);
 
       this.drawWorld(ctx);
@@ -2413,6 +2478,7 @@
         const pct = (r.score / total * 100).toFixed(1);
         return `<div class="leader-row"><span class="swatch" style="background:${r.color};color:${r.color}"></span><span class="leader-name">${i + 1}. ${escapeHtml(r.name)}${r.me ? ' ★' : ''}${r.bot ? ' 🤖' : ''}</span><span class="leader-score">${pct}%</span></div>`;
       }).join('');
+      this.updateRoomLobbyOverlay();
     }
   }
 

@@ -7,7 +7,7 @@
   <meta name="description" content="RoadsSplash.io - a tiny WebRTC canvas territory game for casual friends and bots." />
   <title>RoadsSplash.io</title>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="src/styles.css?v=20260430-5" />
+  <link rel="stylesheet" href="src/styles.css?v=20260430-6" />
 </head>
 <body>
   <canvas id="game" aria-label="RoadsSplash.io game canvas"></canvas>
@@ -123,6 +123,16 @@
     </div>
   </div>
 
+  <div id="roomLobbyOverlay" class="room-lobby-overlay hidden" aria-live="polite">
+    <div class="room-lobby-card glass">
+      <div class="room-lobby-kicker">Room ready</div>
+      <div class="room-lobby-code">ROOM <strong id="lobbyRoomCode">---</strong></div>
+      <p id="lobbyRoomText">Waiting for host to start.</p>
+      <div id="lobbyPlayerCount" class="room-lobby-count">1 player connected</div>
+      <button id="lobbyStartBtn" class="primary big hidden" type="button">Start round</button>
+    </div>
+  </div>
+
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card glass">
       <div class="spinner"></div>
@@ -135,6 +145,6 @@
 
   <div id="toastRoot" class="toast-root" aria-live="polite"></div>
 
-  <script src="src/game.js?v=20260430-5"></script>
+  <script src="src/game.js?v=20260430-6"></script>
 </body>
 </html>
