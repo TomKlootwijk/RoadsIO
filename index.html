@@ -7,7 +7,7 @@
   <meta name="description" content="RoadsSplash.io - a tiny WebRTC canvas territory game for casual friends and bots." />
   <title>RoadsSplash.io</title>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="src/styles.css?v=20260430-3" />
+  <link rel="stylesheet" href="src/styles.css?v=20260430-4" />
 </head>
 <body>
   <canvas id="game" aria-label="RoadsSplash.io game canvas"></canvas>
@@ -84,9 +84,18 @@
         <button id="soloBtn" class="primary big">Solo with bots</button>
         <button id="hostBtn" class="primary big">Host room</button>
         <div class="join-row">
-          <input id="roomInput" maxlength="6" placeholder="ROOM" spellcheck="false" />
+          <input id="roomInput" maxlength="3" placeholder="ABC" spellcheck="false" />
           <button id="joinBtn" class="primary">Join</button>
         </div>
+      </div>
+
+      <div class="lobby-panel">
+        <div class="lobby-head">
+          <h2>Active rooms</h2>
+          <button id="lobbyRefreshBtn" class="ghost" type="button">Refresh</button>
+        </div>
+        <div id="lobbyStatus" class="lobby-status">Finding rooms...</div>
+        <div id="lobbyList" class="lobby-list"></div>
       </div>
 
       <div class="hint-strip">
@@ -97,15 +106,22 @@
 
     <section class="concept-card glass">
       <h2>Core loop</h2>
-      <p>Every second is readable: your ball leaves paint, enemy paint slowly flips, territory grows your score and body, and bigger bodies are easier to ram.</p>
+      <p>Every second is readable: your jello ball leaves paint, enemy paint flips under you, territory grows your score and body, and speed plus size decides splats.</p>
       <ul>
         <li><strong>Paint:</strong> roll over cells to claim them.</li>
-        <li><strong>Convert:</strong> enemy cells resist for a moment, so fights feel tactical.</li>
+        <li><strong>Convert:</strong> roll over enemy cells to cover them.</li>
         <li><strong>Boost:</strong> spend boost to steal, escape, or splat smaller balls.</li>
-        <li><strong>Win:</strong> own the most arena after three minutes.</li>
+        <li><strong>Win:</strong> own the most arena after ninety seconds.</li>
       </ul>
     </section>
   </main>
+
+  <div id="roomFlash" class="room-flash hidden" aria-live="polite">
+    <div class="room-flash-card glass">
+      <div>Room code</div>
+      <strong></strong>
+    </div>
+  </div>
 
   <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
     <div class="modal-card glass">
@@ -119,6 +135,6 @@
 
   <div id="toastRoot" class="toast-root" aria-live="polite"></div>
 
-  <script src="src/game.js?v=20260430-3"></script>
+  <script src="src/game.js?v=20260430-4"></script>
 </body>
 </html>

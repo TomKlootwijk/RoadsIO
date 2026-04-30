@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.1.2-control-overpaint',
+    VERSION: '0.2.0-stability-juice',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -18,29 +18,44 @@
     WORLD_H: 1050,
     GRID_W: 280,
     GRID_H: 175,
-    ROUND_SECONDS: 180,
+    ROUND_SECONDS: 90,
     MAX_PLAYERS: 14,
     MAX_BOTS: 10,
 
-    BASE_RADIUS: 20,
-    MAX_RADIUS_BONUS: 20,
+    ROOM_CODE_LENGTH: 3,
+    LOBBY_REFRESH_MS: 5000,
+
+    BASE_RADIUS: 19,
+    MAX_RADIUS_BONUS: 14,
     BASE_SPEED: 218,
     MAX_AREA_SPEED_BONUS: 72,
     ACCEL: 1300,
     STEER_RESPONSE: 17,
     FRICTION: 7.8,
     BOOST_MULT: 1.55,
-    BOOST_DRAIN: 0.44,
-    BOOST_REGEN: 0.18,
-    BOOST_PAINT_REWARD: 0.018,
+    BOOST_DRAIN: 0.52,
+    BOOST_REGEN: 0.08,
+    BOOST_PAINT_REWARD: 0.00025,
 
     PAINT_POWER: 470,
     CONVERT_POWER: 260,
-    OVERPAINT_CENTER: 0.7,
+    OVERPAINT_CENTER: 0.52,
     TRAIL_DEPOSIT_STEP: 6,
-    COLLISION_PUSH: 0.12,
-    COLLISION_BOUNCE: 0.08,
+    COLLISION_PUSH: 0,
+    COLLISION_BOUNCE: 0,
     REINFORCE_POWER: 260,
+    SPLAT_MIN_IMPACT: 105,
+    SPLAT_POWER_RATIO: 1.12,
+    SPLAT_RADIUS_WEIGHT: 4.8,
+    SPLAT_SPEED_WEIGHT: 0.22,
+    BUMP_FEEDBACK_MS: 180,
+    JELLO_STIFFNESS: 44,
+    JELLO_DAMPING: 10.5,
+    JELLO_SPEED_SQUASH: 0.22,
+    JELLO_IMPACT_SCALE: 0.017,
+    BOOST_SHAKE: 1.25,
+    SPLAT_SHAKE: 22,
+    OWN_SPLAT_SHAKE: 30,
     HOST_SNAPSHOT_HZ: 22,
     CLIENT_INPUT_HZ: 40,
     FULL_GRID_SECONDS: 4,
@@ -151,9 +166,11 @@
       this.nextMusicAt = 0;
       this.musicStep = 0;
       this.lastPaintSound = 0;
+      this.lastConvertSound = 0;
       this.boostOsc = null;
       this.boostGain = null;
       this.shake = 0;
+      this.boostShake = 0;
       this.flash = 0;
     }
     unlock() {
@@ -167,10 +184,10 @@
           master.gain.value = 1;
           master.connect(this.ctx.destination);
           this.musicGain = this.ctx.createGain();
-          this.musicGain.gain.value = 0.34;
+          this.musicGain.gain.value = 0.5;
           this.musicGain.connect(master);
           this.sfxGain = this.ctx.createGain();
-          this.sfxGain.gain.value = 1.18;
+          this.sfxGain.gain.value = 0.95;
           this.sfxGain.connect(master);
           this.nextMusicAt = this.ctx.currentTime + 0.08;
         }
@@ -220,6 +237,7 @@
       this.tone(520 + Math.min(18, amount) * 12, 0.05, 'triangle', 0.032);
     }
     boost(on) {
+      this.boostShake = on ? CONFIG.BOOST_SHAKE : 0;
       if (!this.enabled) return;
       this.unlock();
       const ctx = this.ctx;
@@ -227,13 +245,14 @@
       if (on && !this.boostOsc) {
         this.boostOsc = ctx.createOscillator();
         this.boostGain = ctx.createGain();
-        this.boostOsc.type = 'sawtooth';
-        this.boostOsc.frequency.value = 82;
+        this.boostOsc.type = 'triangle';
+        this.boostOsc.frequency.value = 72;
         this.boostGain.gain.value = 0.0001;
         this.boostOsc.connect(this.boostGain).connect(this.sfxGain);
         this.boostOsc.start();
+        this.tone(180, 0.08, 'triangle', 0.035);
       }
-      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.044 : 0.0001, ctx.currentTime, 0.045);
+      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.018 : 0.0001, ctx.currentTime, 0.055);
       if (!on && this.boostOsc) {
         const osc = this.boostOsc;
         const gain = this.boostGain;
@@ -245,6 +264,7 @@
       }
     }
     stopBoost() {
+      this.boostShake = 0;
       if (!this.boostOsc) return;
       const osc = this.boostOsc;
       const gain = this.boostGain;
@@ -256,10 +276,30 @@
       }, 120);
     }
     pop() {
-      this.tone(130, 0.13, 'triangle', 0.075);
-      this.tone(430, 0.09, 'sine', 0.046);
-      this.shake = Math.max(this.shake, 14);
-      this.flash = 0.18;
+      this.splat();
+    }
+    hit(force = 1) {
+      this.tone(160 + force * 24, 0.09, 'triangle', 0.045);
+      this.tone(320 + force * 55, 0.06, 'sine', 0.035);
+      this.shake = Math.max(this.shake, 5 + force * 3);
+    }
+    convert(amount = 1) {
+      if (!this.enabled || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      if (t - this.lastConvertSound < 0.13) return;
+      this.lastConvertSound = t;
+      this.tone(360 + Math.min(20, amount) * 8, 0.07, 'triangle', 0.028);
+    }
+    join() {
+      this.tone(523, 0.08, 'triangle', 0.04);
+      this.tone(784, 0.1, 'sine', 0.035, this.sfxGain, this.ctx ? this.ctx.currentTime + 0.07 : null);
+    }
+    splat(strength = 1, own = false) {
+      this.tone(105, 0.16, 'triangle', 0.105);
+      this.tone(260, 0.11, 'sawtooth', 0.055);
+      this.tone(620, 0.08, 'sine', 0.04, this.sfxGain, this.ctx ? this.ctx.currentTime + 0.04 : null);
+      this.shake = Math.max(this.shake, (own ? CONFIG.OWN_SPLAT_SHAKE : CONFIG.SPLAT_SHAKE) * strength);
+      this.flash = Math.max(this.flash, own ? 0.3 : 0.22);
     }
     roundEnd() {
       if (!this.enabled) return;
@@ -272,16 +312,17 @@
     }
     tick(dt) {
       this.shake = Math.max(0, this.shake - dt * 42);
+      this.boostShake = Math.max(0, this.boostShake - dt * 4);
       this.flash = Math.max(0, this.flash - dt);
       if (!this.enabled || !this.ctx || !this.musicGain) return;
       if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
       const notes = [0, 3, 5, 7, 10, 7, 5, 3];
-      while (this.nextMusicAt < this.ctx.currentTime + 0.14) {
+      while (this.nextMusicAt < this.ctx.currentTime + 0.22) {
         const step = this.musicStep++;
         const note = notes[step % notes.length] + (step % 16 >= 8 ? 12 : 0);
         const freq = 220 * Math.pow(2, note / 12);
-        this.tone(freq, 0.18, 'triangle', 0.04, this.musicGain, this.nextMusicAt);
-        if (step % 4 === 0) this.tone(freq / 2, 0.36, 'sine', 0.045, this.musicGain, this.nextMusicAt);
+        this.tone(freq, 0.2, 'triangle', 0.07, this.musicGain, this.nextMusicAt);
+        if (step % 4 === 0) this.tone(freq / 2, 0.42, 'sine', 0.08, this.musicGain, this.nextMusicAt);
         this.nextMusicAt += 0.32;
       }
     }
@@ -325,6 +366,8 @@
       this.canvas.addEventListener('pointermove', moveDrag);
       this.canvas.addEventListener('pointerup', endDrag);
       this.canvas.addEventListener('pointercancel', endDrag);
+      this.canvas.addEventListener('pointerleave', endDrag);
+      this.canvas.addEventListener('lostpointercapture', endDrag);
 
       const startStick = (e) => {
         e.preventDefault();
@@ -352,12 +395,27 @@
       this.stick.addEventListener('pointermove', moveStick, { passive: false });
       this.stick.addEventListener('pointerup', endStick);
       this.stick.addEventListener('pointercancel', endStick);
+      this.stick.addEventListener('lostpointercapture', endStick);
 
       const boostOn = (e) => { e.preventDefault(); this.boostDown = true; this.boostButton.classList.add('down'); this.juice.unlock(); };
       const boostOff = () => { this.boostDown = false; this.boostButton.classList.remove('down'); };
       this.boostButton.addEventListener('pointerdown', boostOn, { passive: false });
       this.boostButton.addEventListener('pointerup', boostOff);
       this.boostButton.addEventListener('pointercancel', boostOff);
+      this.boostButton.addEventListener('lostpointercapture', boostOff);
+
+      window.addEventListener('blur', () => this.reset());
+      document.addEventListener('visibilitychange', () => { if (document.hidden) this.reset(); });
+    }
+    reset() {
+      this.keys.clear();
+      this.pointer.active = false;
+      this.touchStick.active = false;
+      this.boostDown = false;
+      this.boostButton.classList.remove('down');
+      this.nub.style.transform = 'translate(0px, 0px)';
+      this.lastState = { x: 0, y: 0, boost: false };
+      this.juice.boost(false);
     }
     updateNub() {
       const dx = this.touchStick.x - this.touchStick.ox;
@@ -492,28 +550,13 @@
           if (old === code) {
             const next = clamp(this.strength[i] + CONFIG.REINFORCE_POWER * dt * falloff * powerScale, 0, 255);
             if (next !== this.strength[i]) { this.strength[i] = next; this.markDirty(i); }
-          } else if (old === 0) {
-            const next = this.strength[i] + CONFIG.PAINT_POWER * dt * falloff * powerScale;
-            if (next >= 42) {
-              this.setOwner(i, code, clamp(next, 70, 190));
-              gained++;
-            } else {
-              this.strength[i] = next;
-              this.markDirty(i);
-            }
           } else {
-            const next = this.strength[i] - CONFIG.CONVERT_POWER * dt * falloff * powerScale;
-            const centeredStamp = falloff >= CONFIG.OVERPAINT_CENTER;
-            if (next <= 0 || centeredStamp) {
-              const strength = centeredStamp
-                ? 106 + (falloff - CONFIG.OVERPAINT_CENTER) * 250
-                : 74 - next * 0.4;
-              this.setOwner(i, code, clamp(strength, 86, 218));
-              gained++;
-            } else {
-              this.strength[i] = next;
-              this.markDirty(i);
-            }
+            const centerClaim = falloff >= CONFIG.OVERPAINT_CENTER;
+            const strength = old === 0
+              ? 78 + falloff * 94 * powerScale
+              : (centerClaim ? 112 + falloff * 92 * powerScale : 76 + falloff * 76 * powerScale);
+            this.setOwner(i, code, clamp(strength, 72, centerClaim ? 235 : 188));
+            gained++;
           }
         }
       }
@@ -741,6 +784,8 @@
         method: 'POST',
         body: {
           hostPeerId: this.id,
+          hostName: this.name,
+          visibility: 'public',
           maxPeers: Math.min(8, CONFIG.MAX_PLAYERS),
           gameVersion: CONFIG.VERSION,
           contentHash: CONFIG.SIGNALING_CONTENT_HASH
@@ -917,11 +962,24 @@
     }
     createPeer(id, makeOffer) {
       const pc = new RTCPeerConnection({ iceServers: CONFIG.ICE_SERVERS });
-      const state = { id, pc, dc: null, open: false, lastInputAt: 0, pendingIce: [] };
+      const state = { id, pc, dc: null, open: false, lastInputAt: 0, pendingIce: [], disconnectTimer: null };
       this.peers.set(id, state);
       pc.onicecandidate = (ev) => { if (ev.candidate) this.signal.sendSignal(id, 'ice', ev.candidate); };
       pc.onconnectionstatechange = () => {
-        if (['failed','closed','disconnected'].includes(pc.connectionState)) this.removePeer(id, false);
+        const stateNow = pc.connectionState;
+        if (stateNow === 'connected') {
+          if (state.disconnectTimer) clearTimeout(state.disconnectTimer);
+          state.disconnectTimer = null;
+        } else if (stateNow === 'disconnected') {
+          if (!state.disconnectTimer) {
+            state.disconnectTimer = setTimeout(() => {
+              state.disconnectTimer = null;
+              if (pc.connectionState === 'disconnected') this.removePeer(id, false);
+            }, 5000);
+          }
+        } else if (stateNow === 'failed' || stateNow === 'closed') {
+          this.removePeer(id, false);
+        }
       };
       pc.ondatachannel = (ev) => this.attachDataChannel(state, ev.channel);
       if (makeOffer) {
@@ -937,6 +995,8 @@
     attachDataChannel(peer, dc) {
       peer.dc = dc;
       dc.onopen = () => {
+        if (peer.disconnectTimer) clearTimeout(peer.disconnectTimer);
+        peer.disconnectTimer = null;
         peer.open = true;
         this.emit('open', peer.id);
         if (!this.isHost) {
@@ -1001,6 +1061,7 @@
         try { peer.dc?.close(); } catch (_) {}
         try { peer.pc?.close(); } catch (_) {}
       }
+      if (peer.disconnectTimer) clearTimeout(peer.disconnectTimer);
       this.peers.delete(id);
       this.emit('close', id);
     }
@@ -1038,6 +1099,7 @@
       this.centerBanner = null;
       this.particles = [];
       this.floaters = [];
+      this.shockwaves = [];
       this.camera = { x: CONFIG.WORLD_W / 2, y: CONFIG.WORLD_H / 2, zoom: 1 };
       this.quality = localStorage.getItem('paintRush.quality') || 'auto';
       this.pixelRatio = 1;
@@ -1052,11 +1114,15 @@
       this.signal = null;
       this.mesh = null;
       this.networkAttempt = 0;
+      this.lobbyRooms = [];
+      this.lobbyLoading = false;
+      this.lastLobbyAt = 0;
 
       this.setupUi();
       this.setupAudioGuards();
       this.resize();
       window.addEventListener('resize', () => this.resize());
+      window.addEventListener('pagehide', () => this.closeHostedRoom());
       requestAnimationFrame((t) => this.loop(t));
     }
     setupUi() {
@@ -1065,6 +1131,7 @@
       $('soloBtn').onclick = () => this.startLocal();
       $('hostBtn').onclick = () => this.startHost();
       $('joinBtn').onclick = () => this.joinRoom();
+      $('lobbyRefreshBtn').onclick = () => this.refreshLobby(true);
       $('modalCancel').onclick = () => { this.hideModal(); this.leaveToMenu(); };
       $('fullscreenBtn').onclick = () => this.toggleFullscreen();
       $('soundBtn').onclick = () => {
@@ -1080,7 +1147,11 @@
         localStorage.setItem('paintRush.quality', this.quality);
         this.resize();
       };
-      $('roomInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); });
+      $('roomInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, CONFIG.ROOM_CODE_LENGTH); });
+      this.refreshLobby(false);
+      setInterval(() => {
+        if (this.mode === 'menu' && !document.hidden) this.refreshLobby(false);
+      }, CONFIG.LOBBY_REFRESH_MS);
     }
     setupAudioGuards() {
       const resume = () => {
@@ -1123,6 +1194,51 @@
     }
     selectedBotCount() { return clamp(parseInt($('botSelect').value || '4', 10) || 0, 0, CONFIG.MAX_BOTS); }
 
+    async refreshLobby(force = false) {
+      if (this.mode !== 'menu' || this.lobbyLoading) return;
+      const t = now();
+      if (!force && t - this.lastLobbyAt < CONFIG.LOBBY_REFRESH_MS - 250) return;
+      this.lobbyLoading = true;
+      this.lastLobbyAt = t;
+      this.renderLobby('loading');
+      const url = `${CONFIG.SIGNALING_URL}/rooms?gameVersion=${encodeURIComponent(CONFIG.VERSION)}&contentHash=${encodeURIComponent(CONFIG.SIGNALING_CONTENT_HASH)}&limit=20`;
+      try {
+        const res = await fetch(url, { cache: 'no-store', mode: 'cors' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data?.ok === false) throw new Error(data?.error || `${res.status} ${res.statusText || 'lobby error'}`);
+        this.lobbyRooms = Array.isArray(data.rooms) ? data.rooms : [];
+        this.renderLobby(this.lobbyRooms.length ? 'ready' : 'empty');
+      } catch (err) {
+        this.lobbyRooms = [];
+        this.renderLobby('error', String(err?.message || err));
+      } finally {
+        this.lobbyLoading = false;
+      }
+    }
+    renderLobby(state = 'ready', details = '') {
+      const status = $('lobbyStatus');
+      const list = $('lobbyList');
+      if (!status || !list) return;
+      if (state === 'loading') status.textContent = 'Finding rooms...';
+      else if (state === 'empty') status.textContent = 'No public rooms right now.';
+      else if (state === 'error') status.textContent = `Lobby unavailable: ${details}`;
+      else status.textContent = `${this.lobbyRooms.length} room${this.lobbyRooms.length === 1 ? '' : 's'} online`;
+      list.innerHTML = '';
+      if (state !== 'ready') return;
+      for (const room of this.lobbyRooms) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'lobby-room';
+        const code = String(room.roomCode || '').toUpperCase().slice(0, CONFIG.ROOM_CODE_LENGTH);
+        const host = escapeHtml(room.hostName || 'Host');
+        const peerCount = Number(room.peerCount || 0);
+        const maxPeers = Number(room.maxPeers || 0);
+        btn.innerHTML = `<span>${host}</span><strong>${escapeHtml(code)}</strong><em>${peerCount}/${maxPeers || '?'} players</em>`;
+        btn.onclick = () => this.joinRoom(code);
+        list.appendChild(btn);
+      }
+    }
+
     startLocal() {
       this.readMenuName();
       this.closeNetwork();
@@ -1156,6 +1272,7 @@
         this.startRound();
         this.showGameUi();
         this.showRoomBadge(this.roomCode);
+        this.showRoomFlash(this.roomCode);
         this.hideModal();
         this.toast(`Room ${this.roomCode} is ready. Share the code with friends.`, 4200);
       } catch (err) {
@@ -1181,10 +1298,11 @@
         );
       }
     }
-    async joinRoom() {
+    async joinRoom(codeOverride = null) {
       this.readMenuName();
-      const code = $('roomInput').value.trim().toUpperCase();
+      const code = String(codeOverride || $('roomInput').value).trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, CONFIG.ROOM_CODE_LENGTH);
       if (!code) { this.toast('Enter a room code first.'); return; }
+      $('roomInput').value = code;
       this.closeNetwork();
       this.mode = 'client';
       this.isHost = false;
@@ -1214,6 +1332,7 @@
       this.mesh.on('open', (id) => {
         this.toasts.clear(/Connected to signaling|Waiting for host|WebRTC/i);
         this.toast(isHost ? 'Friend connected!' : 'Connected to host.');
+        this.juice.join();
         if (!isHost) this.hideModal();
         this.updateNetStatus();
       });
@@ -1225,10 +1344,22 @@
       this.updateNetStatus();
     }
     closeNetwork() {
+      this.closeHostedRoom();
       this.mesh?.close();
       this.mesh = null;
       this.signal?.close();
       this.signal = null;
+    }
+    closeHostedRoom() {
+      if (!this.isHost || !this.roomCode || !this.myId || !window.fetch) return;
+      try {
+        fetch(`${CONFIG.SIGNALING_URL}/rooms/${encodeURIComponent(this.roomCode)}`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hostPeerId: this.myId }),
+          keepalive: true
+        }).catch(() => {});
+      } catch (_) {}
     }
     leaveToMenu(close = true) {
       this.networkAttempt++;
@@ -1247,6 +1378,7 @@
       this.players.clear();
       this.bots.clear();
       this.paint.clear(true);
+      this.refreshLobby(false);
     }
     showGameUi() {
       $('menu').classList.add('hidden');
@@ -1262,6 +1394,15 @@
       el.classList.remove('hidden');
       el.parentElement?.classList.add('room-visible');
       el.querySelector('span').textContent = code;
+    }
+    showRoomFlash(code) {
+      const el = $('roomFlash');
+      el.querySelector('strong').textContent = code;
+      el.classList.remove('hidden');
+      el.querySelector('.room-flash-card').style.animation = 'none';
+      void el.offsetWidth;
+      el.querySelector('.room-flash-card').style.animation = '';
+      setTimeout(() => el.classList.add('hidden'), 2900);
     }
     hideRoomBadge() {
       const el = $('roomBadge');
@@ -1305,6 +1446,7 @@
       this.winner = null;
       this.particles = [];
       this.floaters = [];
+      this.shockwaves = [];
       this.paint.clear(false);
     }
     startRound() {
@@ -1341,7 +1483,9 @@
         vx: 0, vy: 0, r: CONFIG.BASE_RADIUS, targetR: CONFIG.BASE_RADIUS,
         maxSpeed: CONFIG.BASE_SPEED, boost: 0.85, alive: true, respawn: 0,
         input: { x: 0, y: 0, boost: false }, isBot, score: 0, combo: 0,
-        lastPaintX: 0, lastPaintY: 0, noInputTimer: 0
+        lastPaintX: 0, lastPaintY: 0, noInputTimer: 0, lastBumpAt: 0,
+        wobble: 0, wobbleV: 0, squash: 0, stretch: 0, impactSquash: 0,
+        boostPulse: 0, lastSpeed: 0, hitFlash: 0
       };
     }
     spawnPlayer(p, index = 0) {
@@ -1356,6 +1500,7 @@
       p.vx = p.vy = 0;
       p.lastPaintX = p.x;
       p.lastPaintY = p.y;
+      p.wobble = p.wobbleV = p.squash = p.stretch = p.impactSquash = p.boostPulse = p.lastSpeed = p.hitFlash = 0;
     }
     addBotButton() {
       if (!this.isHost) return;
@@ -1420,6 +1565,14 @@
     sendFullSnapshot() {
       if (!this.mesh) return;
       this.mesh.broadcast(this.buildSnapshot(true));
+    }
+    broadcastEventSafe(event) {
+      if (!this.mesh || !event || typeof event !== 'object') return;
+      try {
+        this.mesh.broadcast({ type: 'event', event });
+      } catch (err) {
+        console.warn('Dropped visual event', err);
+      }
     }
     buildSnapshot(full = false) {
       const players = Array.from(this.players.values()).map(p => ({
@@ -1501,8 +1654,12 @@
       if (!event) return;
       if (event.type === 'splat') {
         const p = this.players.get(event.victim) || { x: event.x, y: event.y, color: '#fff' };
-        this.burst(event.x || p.x, event.y || p.y, event.color || p.color, 34, 1.4);
-        this.juice.pop();
+        const x = Number(event.x) || p.x || CONFIG.WORLD_W / 2;
+        const y = Number(event.y) || p.y || CONFIG.WORLD_H / 2;
+        this.burst(x, y, event.color || p.color, 42, 1.35);
+        this.shockwave(x, y, event.killerColor || event.color || p.color, 92);
+        const own = event.victim === this.myId || event.killer === this.myId;
+        this.juice.splat(own ? 1 : 0.65, event.victim === this.myId);
       }
     }
 
@@ -1579,6 +1736,7 @@
       p.y = lerp(p.y, py, blend);
       p.vx = lerp(p.vx, p.targetVx || 0, blend);
       p.vy = lerp(p.vy, p.targetVy || 0, blend);
+      this.updateJello(p, dt, p.input?.boost && p.boost > 0.05);
     }
     updatePlayer(p, dt) {
       if (!p.alive) {
@@ -1594,9 +1752,9 @@
         return;
       }
       const cells = this.paint.getCells(p.code);
-      p.targetR = CONFIG.BASE_RADIUS + Math.min(CONFIG.MAX_RADIUS_BONUS, Math.sqrt(cells) * 0.29);
+      p.targetR = CONFIG.BASE_RADIUS + Math.min(CONFIG.MAX_RADIUS_BONUS, Math.pow(Math.max(0, cells), 0.43) * 0.25);
       p.r = lerp(p.r, p.targetR, 1 - Math.pow(0.0008, dt));
-      p.maxSpeed = CONFIG.BASE_SPEED + Math.min(CONFIG.MAX_AREA_SPEED_BONUS, cells * 0.055) - Math.max(0, p.r - CONFIG.BASE_RADIUS) * 2.2;
+      p.maxSpeed = CONFIG.BASE_SPEED + Math.min(CONFIG.MAX_AREA_SPEED_BONUS, cells * 0.032) - Math.max(0, p.r - CONFIG.BASE_RADIUS) * 3.6;
 
       let ix = p.input?.x || 0, iy = p.input?.y || 0;
       const inputMag = Math.hypot(ix, iy);
@@ -1625,16 +1783,21 @@
       }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
-      if (p.x < p.r) { p.x = p.r; p.vx = Math.abs(p.vx) * 0.45; }
-      if (p.y < p.r) { p.y = p.r; p.vy = Math.abs(p.vy) * 0.45; }
-      if (p.x > CONFIG.WORLD_W - p.r) { p.x = CONFIG.WORLD_W - p.r; p.vx = -Math.abs(p.vx) * 0.45; }
-      if (p.y > CONFIG.WORLD_H - p.r) { p.y = CONFIG.WORLD_H - p.r; p.vy = -Math.abs(p.vy) * 0.45; }
+      let wallHit = 0;
+      if (p.x < p.r) { p.x = p.r; p.vx = Math.abs(p.vx) * 0.28; wallHit = 1; }
+      if (p.y < p.r) { p.y = p.r; p.vy = Math.abs(p.vy) * 0.28; wallHit = 1; }
+      if (p.x > CONFIG.WORLD_W - p.r) { p.x = CONFIG.WORLD_W - p.r; p.vx = -Math.abs(p.vx) * 0.28; wallHit = 1; }
+      if (p.y > CONFIG.WORLD_H - p.r) { p.y = CONFIG.WORLD_H - p.r; p.vy = -Math.abs(p.vy) * 0.28; wallHit = 1; }
+      if (wallHit) p.impactSquash = Math.min(0.32, p.impactSquash + Math.max(0.08, speed / 900));
+
+      this.updateJello(p, dt, wantsBoost);
 
       const paintRadius = p.r * (wantsBoost ? 1.22 : 1.08);
       const gained = this.depositPaintTrail(p, beforeX, beforeY, p.x, p.y, paintRadius, dt, wantsBoost ? 2.05 : 1.55);
       if (p.id === this.myId) {
         this.juice.boost(wantsBoost);
         if (gained > 0) this.juice.paint(gained);
+        if (gained > 10) this.juice.convert(gained);
       }
       if (gained > 0) {
         p.boost = Math.min(1, p.boost + gained * CONFIG.BOOST_PAINT_REWARD);
@@ -1649,6 +1812,22 @@
         this.addParticle(p.x - p.vx * 0.03, p.y - p.vy * 0.03, -p.vx * 0.08 + rand(-20, 20), -p.vy * 0.08 + rand(-20, 20), p.color, rand(0.22, 0.45), rand(3, p.r * 0.25), 0.9);
         p.lastPaintX = p.x; p.lastPaintY = p.y;
       }
+    }
+    updateJello(p, dt, boosting) {
+      const speed = Math.hypot(p.vx, p.vy);
+      const speedDelta = Math.abs(speed - (p.lastSpeed || 0));
+      const targetSquash = clamp(speed / 520 * CONFIG.JELLO_SPEED_SQUASH + p.impactSquash, 0, 0.42);
+      const targetStretch = clamp(speed / 640 * 0.18 + (boosting ? 0.08 : 0), 0, 0.34);
+      p.squash = lerp(p.squash || 0, targetSquash, 1 - Math.exp(-CONFIG.JELLO_STIFFNESS * dt));
+      p.stretch = lerp(p.stretch || 0, targetStretch, 1 - Math.exp(-CONFIG.JELLO_STIFFNESS * 0.65 * dt));
+      p.impactSquash = Math.max(0, (p.impactSquash || 0) - dt * 2.6);
+      p.boostPulse = boosting ? Math.min(1, (p.boostPulse || 0) + dt * 5) : Math.max(0, (p.boostPulse || 0) - dt * 4);
+      const wobbleTarget = clamp((speedDelta / 320) + p.impactSquash * 1.2 + p.boostPulse * 0.08, 0, 0.7);
+      p.wobbleV = (p.wobbleV || 0) + (wobbleTarget - (p.wobble || 0)) * CONFIG.JELLO_STIFFNESS * dt;
+      p.wobbleV *= Math.exp(-CONFIG.JELLO_DAMPING * dt);
+      p.wobble = clamp((p.wobble || 0) + p.wobbleV * dt, 0, 0.8);
+      p.hitFlash = Math.max(0, (p.hitFlash || 0) - dt * 3.2);
+      p.lastSpeed = speed;
     }
     depositPaintTrail(p, x0, y0, x1, y1, radius, dt, powerScale) {
       const d = Math.hypot(x1 - x0, y1 - y0);
@@ -1672,46 +1851,58 @@
           const min = a.r + b.r;
           if (d >= min) continue;
           const nx = dx / d, ny = dy / d;
-          const overlap = min - d;
-          a.x -= nx * overlap * CONFIG.COLLISION_PUSH; a.y -= ny * overlap * CONFIG.COLLISION_PUSH;
-          b.x += nx * overlap * CONFIG.COLLISION_PUSH; b.y += ny * overlap * CONFIG.COLLISION_PUSH;
           const av = a.vx * nx + a.vy * ny;
           const bv = b.vx * nx + b.vy * ny;
           const rel = av - bv;
-          a.vx -= nx * rel * CONFIG.COLLISION_BOUNCE; a.vy -= ny * rel * CONFIG.COLLISION_BOUNCE;
-          b.vx += nx * rel * CONFIG.COLLISION_BOUNCE; b.vy += ny * rel * CONFIG.COLLISION_BOUNCE;
-          const aBoost = a.input?.boost && a.boost < 0.95;
-          const bBoost = b.input?.boost && b.boost < 0.95;
           const impact = Math.abs(rel);
-          if (!this.roundOver && impact > 155) {
-            if ((a.r > b.r * 1.1 || aBoost) && a.r > b.r * 0.86) this.splat(b, a);
-            else if ((b.r > a.r * 1.1 || bBoost) && b.r > a.r * 0.86) this.splat(a, b);
-            else {
-              this.burst((a.x + b.x) / 2, (a.y + b.y) / 2, impact % 2 ? a.color : b.color, 8, 0.5);
-            }
+          if (!this.roundOver && impact > 24) {
+            const aPower = this.splatPower(a);
+            const bPower = this.splatPower(b);
+            if (impact > CONFIG.SPLAT_MIN_IMPACT && aPower > bPower * CONFIG.SPLAT_POWER_RATIO) this.splat(b, a, impact, aPower, bPower);
+            else if (impact > CONFIG.SPLAT_MIN_IMPACT && bPower > aPower * CONFIG.SPLAT_POWER_RATIO) this.splat(a, b, impact, bPower, aPower);
+            else this.bumpPlayers(a, b, impact);
           }
         }
       }
     }
-    splat(victim, killer) {
+    splatPower(p) {
+      return p.r * CONFIG.SPLAT_RADIUS_WEIGHT + Math.hypot(p.vx, p.vy) * CONFIG.SPLAT_SPEED_WEIGHT;
+    }
+    bumpPlayers(a, b, impact = 0) {
+      const t = now();
+      if (t - Math.max(a.lastBumpAt || 0, b.lastBumpAt || 0) < CONFIG.BUMP_FEEDBACK_MS) return;
+      a.lastBumpAt = b.lastBumpAt = t;
+      const force = clamp(impact / 260, 0.35, 1.4);
+      a.impactSquash = Math.min(0.32, (a.impactSquash || 0) + force * CONFIG.JELLO_IMPACT_SCALE * 10);
+      b.impactSquash = Math.min(0.32, (b.impactSquash || 0) + force * CONFIG.JELLO_IMPACT_SCALE * 10);
+      a.hitFlash = b.hitFlash = 0.35;
+      this.burst((a.x + b.x) / 2, (a.y + b.y) / 2, impact % 2 ? a.color : b.color, 12, 0.55);
+      if (a.id === this.myId || b.id === this.myId) this.juice.hit(force);
+    }
+    splat(victim, killer, impact = 0, winnerPower = 0, loserPower = 0) {
       if (!victim.alive || victim.respawn > 0) return;
       victim.alive = false;
       victim.respawn = 1.9;
       victim.vx = victim.vy = 0;
+      victim.impactSquash = 0.42;
+      killer.impactSquash = Math.min(0.36, (killer.impactSquash || 0) + 0.24);
+      killer.hitFlash = 0.42;
       killer.boost = Math.min(1, killer.boost + 0.38);
       this.paint.paintCircle(victim.x, victim.y, victim.r * 2.7, killer.code, 0.5, 2.8);
       this.paint.eraseCircle(victim.x, victim.y, victim.r * 1.2, 0.45);
-      this.burst(victim.x, victim.y, victim.color, 46, 1.5);
-      this.floatText(victim.x, victim.y - victim.r, `${killer.name} splatted ${victim.name}!`, killer.color);
-      if (victim.id === this.myId || killer.id === this.myId) this.juice.pop();
-      this.mesh?.broadcast({ type: 'event', event: { type: 'splat', victim: victim.id, killer: killer.id, x: victim.x, y: victim.y, color: victim.color } });
+      this.burst(victim.x, victim.y, victim.color, 64, 1.8);
+      this.shockwave(victim.x, victim.y, killer.color, victim.r * 3.2);
+      const reason = winnerPower && loserPower ? ` ${Math.round(winnerPower - loserPower)} power` : '';
+      this.floatText(victim.x, victim.y - victim.r, `${killer.name} splatted ${victim.name}!${reason}`, killer.color, 1.25);
+      if (victim.id === this.myId || killer.id === this.myId) this.juice.splat(1, victim.id === this.myId);
+      this.broadcastEventSafe({ type: 'splat', victim: victim.id, killer: killer.id, x: victim.x, y: victim.y, color: victim.color, killerColor: killer.color, impact });
     }
     endRound() {
       const live = Array.from(this.players.values());
       live.sort((a, b) => this.paint.getCells(b.code) - this.paint.getCells(a.code));
       this.winner = live[0] || null;
       this.roundOver = true;
-      this.roundOverTimer = 8.5;
+      this.roundOverTimer = 5;
       if (this.winner) {
         this.showRoundBanner(this.winner);
         this.juice.roundEnd();
@@ -1791,6 +1982,9 @@
     floatText(x, y, text, color, scale = 1) {
       this.floaters.push({ x, y, text, color, life: 1.3 * scale, maxLife: 1.3 * scale, vy: -42 * scale, scale });
     }
+    shockwave(x, y, color, radius = 90) {
+      this.shockwaves.push({ x, y, color, radius, life: 0.42, maxLife: 0.42 });
+    }
     tickParticles(dt) {
       for (const p of this.particles) {
         p.life -= dt;
@@ -1803,6 +1997,8 @@
       this.particles = this.particles.filter(p => p.life > 0);
       for (const f of this.floaters) { f.life -= dt; f.y += f.vy * dt; }
       this.floaters = this.floaters.filter(f => f.life > 0);
+      for (const s of this.shockwaves) s.life -= dt;
+      this.shockwaves = this.shockwaves.filter(s => s.life > 0);
     }
 
     render(dt) {
@@ -1824,7 +2020,7 @@
       const viewTarget = Math.min(w / dpr / 880, h / dpr / 560);
       const mobileBoost = innerWidth < 720 ? 0.82 : 1;
       this.camera.zoom = clamp(viewTarget * mobileBoost, 0.42, 1.18) * dpr;
-      const shake = this.juice.shake * dpr;
+      const shake = (this.juice.shake + this.juice.boostShake) * dpr;
       const sx = shake ? rand(-shake, shake) : 0;
       const sy = shake ? rand(-shake, shake) : 0;
       const tx = w / 2 - this.camera.x * this.camera.zoom + sx;
@@ -1833,6 +2029,7 @@
 
       this.drawWorld(ctx);
       this.drawParticles(ctx, false);
+      this.drawShockwaves(ctx);
       for (const p of this.players.values()) this.drawPlayer(ctx, p);
       this.drawParticles(ctx, true);
       this.drawFloaters(ctx);
@@ -1919,42 +2116,77 @@
       }
       const speed = Math.hypot(p.vx, p.vy);
       const angle = speed > 10 ? Math.atan2(p.vy, p.vx) : 0;
+      const t = now() * 0.006;
+      const wobble = p.wobble || 0;
+      const squash = clamp((p.squash || 0) + Math.sin(t * 1.7 + p.code) * wobble * 0.03, 0, 0.46);
+      const stretch = clamp((p.stretch || 0) + (p.boostPulse || 0) * 0.08, 0, 0.38);
+      const pulse = 1 + Math.sin(t * 2.6 + p.code) * wobble * 0.04;
       ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.27)';
+      ctx.beginPath();
+      ctx.ellipse(p.x + 3, p.y + p.r * 0.72, p.r * (1.05 + stretch), p.r * 0.34, 0, 0, TAU);
+      ctx.fill();
       ctx.translate(p.x, p.y);
       ctx.rotate(angle);
-      const squash = clamp(speed / 440, 0, 0.28);
-      ctx.scale(1 + squash, 1 - squash * 0.45);
+      ctx.scale((1 + stretch + squash * 0.55) * pulse, Math.max(0.62, 1 - squash * 0.62));
 
-      ctx.shadowColor = 'rgba(0,0,0,0.35)';
-      ctx.shadowBlur = 18;
-      ctx.fillStyle = 'rgba(0,0,0,0.24)';
-      ctx.beginPath();
-      ctx.ellipse(0, p.r * 0.55, p.r * 0.95, p.r * 0.35, 0, 0, TAU);
-      ctx.fill();
-      ctx.shadowBlur = 0;
+      if ((p.boostPulse || 0) > 0.02) {
+        ctx.save();
+        ctx.globalAlpha = 0.22 + p.boostPulse * 0.28;
+        ctx.strokeStyle = rgba(p.color, 0.8);
+        ctx.lineWidth = Math.max(3, p.r * 0.16);
+        for (let i = 0; i < 3; i++) {
+          ctx.beginPath();
+          ctx.moveTo(-p.r * (1.1 + i * 0.25), (i - 1) * p.r * 0.28);
+          ctx.lineTo(-p.r * (2.1 + i * 0.3), (i - 1) * p.r * 0.36);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
 
       const grad = ctx.createRadialGradient(-p.r * 0.35, -p.r * 0.45, p.r * 0.15, 0, 0, p.r * 1.2);
-      grad.addColorStop(0, lighten(p.color, 0.55));
+      grad.addColorStop(0, lighten(p.color, 0.58));
       grad.addColorStop(0.45, p.color);
-      grad.addColorStop(1, darken(p.color, 0.36));
+      grad.addColorStop(1, darken(p.color, 0.38));
+      ctx.shadowColor = rgba(p.color, 0.35);
+      ctx.shadowBlur = 16 + p.boostPulse * 16;
       ctx.fillStyle = grad;
       ctx.beginPath();
-      ctx.arc(0, 0, p.r, 0, TAU);
+      const points = 30;
+      for (let i = 0; i <= points; i++) {
+        const a = i / points * TAU;
+        const wave = Math.sin(a * 3 + t + p.code) * wobble * 0.08
+          + Math.sin(a * 2 - t * 0.8) * wobble * 0.04
+          + Math.cos(a - Math.PI) * (p.impactSquash || 0) * 0.08;
+        const rr = p.r * (1 + wave);
+        const x = Math.cos(a) * rr;
+        const y = Math.sin(a) * rr;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-      ctx.lineWidth = 2.5;
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = (p.hitFlash || 0) > 0 ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.38)';
+      ctx.lineWidth = 2.5 + (p.hitFlash || 0) * 5;
       ctx.stroke();
       ctx.fillStyle = 'rgba(255,255,255,0.58)';
       ctx.beginPath();
       ctx.ellipse(-p.r * 0.33, -p.r * 0.42, p.r * 0.24, p.r * 0.13, -0.55, 0, TAU);
       ctx.fill();
-      if (p.input?.boost && p.boost > 0.03) {
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.beginPath();
+      ctx.ellipse(p.r * 0.18, p.r * 0.22, p.r * 0.46, p.r * 0.18, 0.4, 0, TAU);
+      ctx.fill();
+      if ((p.boostPulse || 0) > 0.02) {
         ctx.globalAlpha = 0.8;
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(0, 0, p.r + 5 + Math.sin(now() * 0.02) * 2, -0.7, 0.7);
-        ctx.stroke();
+        for (let i = 0; i < 2; i++) {
+          ctx.beginPath();
+          ctx.arc(0, 0, p.r + 5 + i * 5 + Math.sin(t * 4) * 2, -0.8, 0.8);
+          ctx.stroke();
+        }
       }
       ctx.restore();
 
@@ -1963,7 +2195,7 @@
       ctx.font = '700 18px ui-rounded, system-ui, sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const name = p.id === this.myId ? `${p.name} ★` : p.name;
+      const name = p.id === this.myId ? `${p.name} *` : p.name;
       const width = ctx.measureText(name).width + 18;
       ctx.fillStyle = 'rgba(6,8,18,0.48)';
       roundRect(ctx, -width / 2, -12, width, 24, 12);
@@ -1982,6 +2214,19 @@
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size * (0.45 + a * 0.8), 0, TAU);
         ctx.fill();
+      }
+      ctx.restore();
+    }
+    drawShockwaves(ctx) {
+      ctx.save();
+      for (const s of this.shockwaves) {
+        const a = clamp(s.life / s.maxLife, 0, 1);
+        ctx.globalAlpha = a * 0.82;
+        ctx.strokeStyle = rgba(s.color, 0.9);
+        ctx.lineWidth = 5 * a;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.radius * (1.1 - a * 0.6), 0, TAU);
+        ctx.stroke();
       }
       ctx.restore();
     }
@@ -2042,6 +2287,7 @@
       else $('roundState').textContent = this.isHost ? 'Paint, boost, splat' : 'Connected to host';
       const me = this.players.get(this.myId);
       $('boostFill').style.width = `${Math.round((me?.boost ?? 0) * 100)}%`;
+      $('boostFill').parentElement.classList.toggle('boosting', !!(me?.input?.boost && me?.boost > 0.03));
       const rows = Array.from(this.players.values()).map(p => ({
         name: p.name,
         color: p.color,
