@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.9-round-delta-reset',
+    VERSION: '0.2.10-no-live-full-grid',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -2340,7 +2340,7 @@
       }
       if (this.accumPaintNet >= 1 / CONFIG.PAINT_SNAPSHOT_HZ) {
         this.accumPaintNet = 0;
-        const full = this.accumFullGrid >= CONFIG.FULL_GRID_SECONDS;
+        const full = !this.roundActive && this.accumFullGrid >= CONFIG.FULL_GRID_SECONDS;
         if (full) this.accumFullGrid = 0;
         this.mesh.broadcast(this.buildPaintSnapshot(full), 'state');
       }
