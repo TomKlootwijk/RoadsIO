@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.3-reliable-room-sync',
+    VERSION: '0.2.4-split-network-channels',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -57,6 +57,7 @@
     SPLAT_SHAKE: 22,
     OWN_SPLAT_SHAKE: 30,
     HOST_SNAPSHOT_HZ: 12,
+    PAINT_SNAPSHOT_HZ: 5,
     CLIENT_INPUT_HZ: 30,
     FULL_GRID_SECONDS: 5,
     NET_SNAPSHOT_BUFFER_LIMIT: 90000,
@@ -340,7 +341,7 @@
       this.keys = new Set();
       this.pointer = { active: false, ox: 0, oy: 0, x: 0, y: 0 };
       this.pointerOriginProvider = null;
-      this.touchStick = { active: false, ox: 0, oy: 0, x: 0, y: 0 };
+      this.touchStick = { active: false, ox: 0, oy: 0, x: 0, y: 0, startedAt: 0 };
       this.boostDown = false;
       this.lastState = { x: 0, y: 0, boost: false };
       this.bind();
@@ -378,33 +379,72 @@
       this.canvas.addEventListener('pointerleave', endDrag);
       this.canvas.addEventListener('lostpointercapture', endDrag);
 
-      const startStick = (e) => {
-        e.preventDefault();
+      const startStickAt = (clientX, clientY, e = null) => {
+        e?.preventDefault?.();
         const rect = this.stick.getBoundingClientRect();
         this.touchStick.active = true;
         this.touchStick.ox = rect.left + rect.width / 2;
         this.touchStick.oy = rect.top + rect.height / 2;
-        this.touchStick.x = e.clientX;
-        this.touchStick.y = e.clientY;
-        try { this.stick.setPointerCapture?.(e.pointerId); } catch (_) {}
+        this.touchStick.x = clientX;
+        this.touchStick.y = clientY;
+        this.touchStick.startedAt = performance.now();
+        if (e?.pointerId !== undefined) {
+          try { this.stick.setPointerCapture?.(e.pointerId); } catch (_) {}
+        }
         this.updateNub();
         this.juice.unlock();
       };
-      const moveStick = (e) => {
+      const moveStickAt = (clientX, clientY) => {
         if (!this.touchStick.active) return;
-        this.touchStick.x = e.clientX;
-        this.touchStick.y = e.clientY;
+        this.touchStick.x = clientX;
+        this.touchStick.y = clientY;
         this.updateNub();
       };
-      const endStick = () => {
+      const endStick = (e = null) => {
+        if (this.touchStick.active && e && performance.now() - this.touchStick.startedAt < 120) return;
         this.touchStick.active = false;
         this.nub.style.transform = 'translate(0px, 0px)';
       };
+      const startStick = (e) => startStickAt(e.clientX, e.clientY, e);
+      const moveStick = (e) => moveStickAt(e.clientX, e.clientY);
+      const touchControlsVisible = () => {
+        const root = this.stick.closest('.touch-controls');
+        return !!root && !root.classList.contains('hidden') && getComputedStyle(root).display !== 'none';
+      };
+      const inStickFallbackZone = (clientX, clientY) => clientX < Math.min(220, innerWidth * 0.55) && clientY > innerHeight * 0.45;
       this.stick.addEventListener('pointerdown', startStick, { passive: false });
+      this.nub.addEventListener('pointerdown', startStick, { passive: false });
       this.stick.addEventListener('pointermove', moveStick, { passive: false });
+      window.addEventListener('pointermove', moveStick, { passive: false });
       this.stick.addEventListener('pointerup', endStick);
-      this.stick.addEventListener('pointercancel', endStick);
-      this.stick.addEventListener('lostpointercapture', endStick);
+      window.addEventListener('pointerup', endStick);
+      this.stick.addEventListener('touchstart', (e) => {
+        const t = e.touches[0];
+        if (t) startStickAt(t.clientX, t.clientY, e);
+      }, { passive: false });
+      this.nub.addEventListener('touchstart', (e) => {
+        const t = e.touches[0];
+        if (t) startStickAt(t.clientX, t.clientY, e);
+      }, { passive: false });
+      window.addEventListener('touchstart', (e) => {
+        if (this.touchStick.active || !touchControlsVisible()) return;
+        const t = e.touches[0];
+        if (t && inStickFallbackZone(t.clientX, t.clientY)) startStickAt(t.clientX, t.clientY, e);
+      }, { passive: false });
+      window.addEventListener('touchmove', (e) => {
+        if (!this.touchStick.active) return;
+        const t = e.touches[0];
+        if (t) {
+          e.preventDefault();
+          moveStickAt(t.clientX, t.clientY);
+        }
+      }, { passive: false });
+      window.addEventListener('touchend', endStick, { passive: true });
+      window.addEventListener('touchcancel', endStick, { passive: true });
+      this.stick.addEventListener('mousedown', (e) => startStickAt(e.clientX, e.clientY, e));
+      this.nub.addEventListener('mousedown', (e) => startStickAt(e.clientX, e.clientY, e));
+      window.addEventListener('mousemove', (e) => moveStickAt(e.clientX, e.clientY));
+      window.addEventListener('mouseup', endStick);
 
       const boostOn = (e) => { e.preventDefault(); this.boostDown = true; this.boostButton.classList.add('down'); this.juice.unlock(); };
       const boostOff = () => { this.boostDown = false; this.boostButton.classList.remove('down'); };
@@ -412,6 +452,11 @@
       this.boostButton.addEventListener('pointerup', boostOff);
       this.boostButton.addEventListener('pointercancel', boostOff);
       this.boostButton.addEventListener('lostpointercapture', boostOff);
+      this.boostButton.addEventListener('touchstart', boostOn, { passive: false });
+      this.boostButton.addEventListener('touchend', boostOff, { passive: true });
+      this.boostButton.addEventListener('touchcancel', boostOff, { passive: true });
+      this.boostButton.addEventListener('mousedown', boostOn);
+      window.addEventListener('mouseup', boostOff);
 
       window.addEventListener('blur', () => this.reset());
       document.addEventListener('visibilitychange', () => { if (document.hidden) this.reset(); });
@@ -972,6 +1017,7 @@
     close() {
       for (const peer of this.peers.values()) {
         try { peer.dc?.close(); } catch (_) {}
+        try { peer.stateDc?.close(); } catch (_) {}
         try { peer.pc?.close(); } catch (_) {}
       }
       this.peers.clear();
@@ -987,7 +1033,7 @@
     }
     createPeer(id, makeOffer) {
       const pc = new RTCPeerConnection({ iceServers: CONFIG.ICE_SERVERS });
-      const state = { id, pc, dc: null, open: false, lastInputAt: 0, pendingIce: [], disconnectTimer: null };
+      const state = { id, pc, dc: null, stateDc: null, open: false, openEmitted: false, lastInputAt: 0, pendingIce: [], disconnectTimer: null };
       this.peers.set(id, state);
       pc.onicecandidate = (ev) => { if (ev.candidate) this.signal.sendSignal(id, 'ice', ev.candidate); };
       pc.onconnectionstatechange = () => {
@@ -1004,8 +1050,10 @@
       };
       pc.ondatachannel = (ev) => this.attachDataChannel(state, ev.channel);
       if (makeOffer) {
-        const dc = pc.createDataChannel('roads-splash');
+        const dc = pc.createDataChannel('roads-control');
         this.attachDataChannel(state, dc);
+        const stateDc = pc.createDataChannel('roads-state', { ordered: false, maxRetransmits: 0 });
+        this.attachDataChannel(state, stateDc);
         pc.createOffer()
           .then(offer => pc.setLocalDescription(offer))
           .then(() => this.signal.sendSignal(id, 'offer', pc.localDescription))
@@ -1014,11 +1062,16 @@
       return state;
     }
     attachDataChannel(peer, dc) {
-      peer.dc = dc;
+      const isState = dc.label === 'roads-state';
+      if (isState) peer.stateDc = dc;
+      else peer.dc = dc;
       dc.onopen = () => {
         if (peer.disconnectTimer) clearTimeout(peer.disconnectTimer);
         peer.disconnectTimer = null;
+        if (isState) return;
         peer.open = true;
+        if (peer.openEmitted) return;
+        peer.openEmitted = true;
         this.emit('open', peer.id);
         if (!this.isHost) {
           this.game.sendClientHello(true);
@@ -1027,7 +1080,12 @@
           this.game.sendFullSnapshotTo(peer.id);
         }
       };
-      dc.onclose = () => { peer.open = false; this.emit('close', peer.id); };
+      dc.onclose = () => {
+        if (isState) return;
+        peer.open = false;
+        peer.openEmitted = false;
+        this.emit('close', peer.id);
+      };
       dc.onmessage = (ev) => {
         const msg = safeJson(ev.data);
         if (msg) this.emit('message', { from: peer.id, msg });
@@ -1065,16 +1123,18 @@
       const pending = peer.pendingIce.splice(0);
       for (const candidate of pending) await peer.pc.addIceCandidate(candidate);
     }
-    send(id, msg) {
+    send(id, msg, channel = 'control') {
       const peer = this.peers.get(id);
-      if (!peer?.dc || peer.dc.readyState !== 'open') return false;
-      if (msg?.type === 'snapshot' && peer.dc.bufferedAmount > CONFIG.NET_SNAPSHOT_BUFFER_LIMIT) return false;
-      if ((msg?.type === 'input' || msg?.type === 'event') && peer.dc.bufferedAmount > CONFIG.NET_INPUT_BUFFER_LIMIT) return false;
-      try { peer.dc.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
+      const useState = channel === 'state';
+      const dc = useState ? peer?.stateDc : peer?.dc;
+      if (!dc || dc.readyState !== 'open') return false;
+      if ((msg?.type === 'paint' || msg?.type === 'snapshot') && dc.bufferedAmount > CONFIG.NET_SNAPSHOT_BUFFER_LIMIT) return false;
+      if (msg?.type === 'input' && dc.bufferedAmount > CONFIG.NET_INPUT_BUFFER_LIMIT) return false;
+      try { dc.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
     }
-    broadcast(msg) {
+    broadcast(msg, channel = 'control') {
       let sent = 0;
-      for (const id of this.peers.keys()) if (this.send(id, msg)) sent++;
+      for (const id of this.peers.keys()) if (this.send(id, msg, channel)) sent++;
       return sent;
     }
     removePeer(id, close = true) {
@@ -1082,6 +1142,7 @@
       if (!peer) return;
       if (close) {
         try { peer.dc?.close(); } catch (_) {}
+        try { peer.stateDc?.close(); } catch (_) {}
         try { peer.pc?.close(); } catch (_) {}
       }
       if (peer.disconnectTimer) clearTimeout(peer.disconnectTimer);
@@ -1131,6 +1192,7 @@
       this.pixelRatio = 1;
       this.lastTick = now();
       this.accumNet = 0;
+      this.accumPaintNet = 0;
       this.accumInput = 0;
       this.accumFullGrid = 0;
       this.fps = 60;
@@ -1151,7 +1213,10 @@
       this.setupAudioGuards();
       this.resize();
       window.addEventListener('resize', () => this.resize());
-      window.addEventListener('pagehide', () => this.closeHostedRoom());
+      window.addEventListener('pagehide', () => {
+        if (this.isHost) this.closeHostedRoom();
+        else this.closeClientRoomPeer();
+      });
       requestAnimationFrame((t) => this.loop(t));
     }
     setupUi() {
@@ -1409,6 +1474,7 @@
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
       }
+      if (!this.isHost) this.closeClientRoomPeer();
       this.closeHostedRoom();
       this.mesh?.close();
       this.mesh = null;
@@ -1422,6 +1488,22 @@
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ hostPeerId: this.myId }),
+          keepalive: true
+        }).catch(() => {});
+      } catch (_) {}
+    }
+    closeClientRoomPeer() {
+      if (this.isHost || !this.roomCode || !this.myId || !window.fetch) return;
+      try {
+        fetch(`${CONFIG.SIGNALING_URL}/rooms/${encodeURIComponent(this.roomCode)}/signals`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from: this.myId,
+            to: this.signal?.hostPeerId || '*',
+            kind: 'bye',
+            payload: { peerId: this.myId }
+          }),
           keepalive: true
         }).catch(() => {});
       } catch (_) {}
@@ -1718,6 +1800,7 @@
         }
       } else {
         if (msg.type === 'snapshot') this.applySnapshot(msg);
+        else if (msg.type === 'paint') this.applyPaintSnapshot(msg);
         else if (msg.type === 'event') this.applyEvent(msg.event);
         else if (msg.type === 'host-hello') this.hostId = msg.id;
       }
@@ -1725,10 +1808,12 @@
     sendFullSnapshotTo(id) {
       if (!this.mesh) return;
       this.mesh.send(id, this.buildSnapshot(true));
+      this.mesh.send(id, this.buildPaintSnapshot(true, false), 'state');
     }
     sendFullSnapshot() {
       if (!this.mesh) return;
       this.mesh.broadcast(this.buildSnapshot(true));
+      this.mesh.broadcast(this.buildPaintSnapshot(true), 'state');
     }
     broadcastEventSafe(event) {
       if (!this.mesh || !event || typeof event !== 'object') return;
@@ -1746,9 +1831,6 @@
         alive: p.alive, respawn: Math.round(p.respawn * 100) / 100,
         isBot: p.isBot, score: this.paint.getCells(p.code)
       }));
-      const grid = full ? this.paint.fullSnapshot() : undefined;
-      const deltas = full ? undefined : this.paint.consumeNetworkDeltas();
-      if (full) this.paint.consumeNetworkDeltas(); // clear outgoing delta queue after a full sync
       return {
         type: 'snapshot',
         version: CONFIG.VERSION,
@@ -1759,7 +1841,19 @@
         roundActive: this.roundActive,
         roundOver: this.roundOver,
         winner: this.winner ? { code: this.winner.code, name: this.winner.name } : null,
-        players,
+        players
+      };
+    }
+    buildPaintSnapshot(full = false, consume = true) {
+      const grid = full ? this.paint.fullSnapshot() : undefined;
+      const deltas = full ? undefined : this.paint.consumeNetworkDeltas();
+      if (full && consume) this.paint.consumeNetworkDeltas();
+      return {
+        type: 'paint',
+        version: CONFIG.VERSION,
+        t: Math.round(performance.now()),
+        full,
+        room: this.roomCode,
         grid,
         deltas
       };
@@ -1785,12 +1879,13 @@
             firstNetworkState = true;
           }
           firstNetworkState = firstNetworkState || p.netSeenAt === undefined;
+          const wasAlive = p.alive;
           p.code = sp.code;
           p.name = sp.name;
           p.color = sp.color;
           p.targetX = sp.x; p.targetY = sp.y; p.targetVx = sp.vx; p.targetVy = sp.vy;
           p.netSeenAt = performance.now();
-          if (firstNetworkState) {
+          if (firstNetworkState || wasAlive !== sp.alive || (!sp.alive && p.id === this.myId)) {
             p.x = sp.x; p.y = sp.y; p.vx = sp.vx; p.vy = sp.vy;
           } else if (p.id === this.myId) {
             const error = dist2(p.x, p.y, sp.x, sp.y);
@@ -1809,8 +1904,6 @@
       }
       for (const id of Array.from(this.players.keys())) if (!seen.has(id)) this.players.delete(id);
       if (this.mode === 'client' && !this.players.has(this.myId)) this.sendClientHello();
-      if (msg.full && msg.grid) this.paint.applyFull(msg.grid);
-      if (msg.deltas) this.paint.applyDeltas(msg.deltas);
       if (becameRoundOver && this.winner) {
         this.showRoundBanner(this.winner);
         this.juice.roundEnd();
@@ -1824,6 +1917,10 @@
         this.updateRoomLobbyOverlay();
       }
       this.hideModal();
+    }
+    applyPaintSnapshot(msg) {
+      if (msg?.full && msg.grid) this.paint.applyFull(msg.grid);
+      if (msg?.deltas) this.paint.applyDeltas(msg.deltas);
     }
     applyEvent(event) {
       if (!event) return;
@@ -1894,14 +1991,20 @@
       if (!me) this.sendClientHello();
       if (me && this.roundActive && !this.roundOver) {
         me.input = s;
-        this.updatePlayer(me, dt);
-        this.paint.clearOutgoingDeltas();
+        if (me.alive) {
+          this.updatePlayer(me, dt);
+          this.paint.clearOutgoingDeltas();
+        } else {
+          this.juice.boost(false);
+        }
       }
       this.accumInput += dt;
       if (this.accumInput >= 1 / CONFIG.CLIENT_INPUT_HZ) {
         this.accumInput = 0;
         this.juice.boost(this.roundActive && !this.roundOver && s.boost && Math.hypot(s.x, s.y) > 0.1);
-        this.mesh?.broadcast({ type: 'input', x: s.x, y: s.y, boost: s.boost });
+        if (!this.mesh?.broadcast({ type: 'input', x: s.x, y: s.y, boost: s.boost }, 'state')) {
+          this.mesh?.broadcast({ type: 'input', x: s.x, y: s.y, boost: s.boost });
+        }
       }
       for (const p of this.players.values()) {
         if (p.id !== this.myId) this.smoothNetworkPlayer(p, dt);
@@ -2148,12 +2251,17 @@
     networkHost(dt) {
       if (!this.mesh) return;
       this.accumNet += dt;
+      this.accumPaintNet += dt;
       this.accumFullGrid += dt;
       if (this.accumNet >= 1 / CONFIG.HOST_SNAPSHOT_HZ) {
         this.accumNet = 0;
+        this.mesh.broadcast(this.buildSnapshot(false));
+      }
+      if (this.accumPaintNet >= 1 / CONFIG.PAINT_SNAPSHOT_HZ) {
+        this.accumPaintNet = 0;
         const full = this.accumFullGrid >= CONFIG.FULL_GRID_SECONDS;
         if (full) this.accumFullGrid = 0;
-        this.mesh.broadcast(this.buildSnapshot(full));
+        this.mesh.broadcast(this.buildPaintSnapshot(full), 'state');
       }
     }
 
