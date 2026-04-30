@@ -125,3 +125,12 @@ label { display: grid; gap: 7px; color: #dce0ff; font-size: 13px; letter-spacing
   .leader-row { grid-template-columns: 13px minmax(0, 1fr) auto; gap: 4px; margin-top: 5px; font-size: 10px; }
   .swatch { width: 9px; height: 9px; }
 }
+@media (hover: none) and (orientation: portrait), (pointer: coarse) and (orientation: portrait) {
+  .hud { inset: max(8px, env(safe-area-inset-top)) auto auto max(8px, env(safe-area-inset-left)); width: min(48vw, 220px); grid-template-columns: 1fr; gap: 0; }
+  .hud-left { border-radius: 14px; padding: 9px 10px; }
+  .hud-right { display: block !important; position: fixed; top: max(58px, calc(env(safe-area-inset-top) + 58px)); right: max(8px, env(safe-area-inset-right)); width: min(42vw, 178px); max-width: 178px; border-radius: 14px; padding: 8px 9px; }
+  .hud-mid { display: none; }
+  .hud-mid.room-visible { display: block; position: fixed; top: max(96px, calc(env(safe-area-inset-top) + 96px)); left: max(8px, env(safe-area-inset-left)); width: min(48vw, 220px); min-width: 0; border-radius: 14px; padding: 7px 10px; text-align: left; }
+  .hud-mid.room-visible .room-badge { margin: 0; font-size: 11px; letter-spacing: 0.08em; }
+  .hud-mid.room-visible .net-status { display: none; }
+}

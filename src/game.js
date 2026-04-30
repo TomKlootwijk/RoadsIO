@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.1.0-prototype',
+    VERSION: '0.1.1-client-prediction',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -33,8 +33,8 @@
     BOOST_REGEN: 0.18,
     BOOST_PAINT_REWARD: 0.018,
 
-    PAINT_POWER: 380,
-    CONVERT_POWER: 205,
+    PAINT_POWER: 470,
+    CONVERT_POWER: 260,
     TRAIL_DEPOSIT_STEP: 6,
     COLLISION_PUSH: 0.22,
     COLLISION_BOUNCE: 0.18,
@@ -122,6 +122,11 @@
 
   class Toasts {
     constructor(root) { this.root = root; }
+    clear(match = null) {
+      for (const el of Array.from(this.root.children)) {
+        if (!match || match.test(el.textContent || '')) el.remove();
+      }
+    }
     show(text, ms = 2500) {
       const el = document.createElement('div');
       el.className = 'toast';
@@ -157,13 +162,13 @@
           if (!AudioContext) return false;
           this.ctx = new AudioContext();
           const master = this.ctx.createGain();
-          master.gain.value = 0.9;
+          master.gain.value = 1;
           master.connect(this.ctx.destination);
           this.musicGain = this.ctx.createGain();
-          this.musicGain.gain.value = 0.26;
+          this.musicGain.gain.value = 0.34;
           this.musicGain.connect(master);
           this.sfxGain = this.ctx.createGain();
-          this.sfxGain.gain.value = 1.05;
+          this.sfxGain.gain.value = 1.18;
           this.sfxGain.connect(master);
           this.nextMusicAt = this.ctx.currentTime + 0.08;
         }
@@ -179,7 +184,7 @@
       localStorage.setItem('paintRush.sound', this.enabled ? 'on' : 'off');
       if (this.enabled) {
         this.unlock();
-        this.beep(660, 0.08, 'triangle', 0.05);
+        setTimeout(() => this.beep(660, 0.1, 'triangle', 0.08), 60);
       } else {
         this.stopBoost();
       }
@@ -210,7 +215,7 @@
       const t = this.ctx.currentTime;
       if (t - this.lastPaintSound < 0.085) return;
       this.lastPaintSound = t;
-      this.tone(520 + Math.min(18, amount) * 12, 0.045, 'triangle', 0.02);
+      this.tone(520 + Math.min(18, amount) * 12, 0.05, 'triangle', 0.032);
     }
     boost(on) {
       if (!this.enabled) return;
@@ -226,7 +231,7 @@
         this.boostOsc.connect(this.boostGain).connect(this.sfxGain);
         this.boostOsc.start();
       }
-      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.03 : 0.0001, ctx.currentTime, 0.045);
+      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.044 : 0.0001, ctx.currentTime, 0.045);
       if (!on && this.boostOsc) {
         const osc = this.boostOsc;
         const gain = this.boostGain;
@@ -273,8 +278,8 @@
         const step = this.musicStep++;
         const note = notes[step % notes.length] + (step % 16 >= 8 ? 12 : 0);
         const freq = 220 * Math.pow(2, note / 12);
-        this.tone(freq, 0.18, 'triangle', 0.026, this.musicGain, this.nextMusicAt);
-        if (step % 4 === 0) this.tone(freq / 2, 0.36, 'sine', 0.032, this.musicGain, this.nextMusicAt);
+        this.tone(freq, 0.18, 'triangle', 0.04, this.musicGain, this.nextMusicAt);
+        if (step % 4 === 0) this.tone(freq / 2, 0.36, 'sine', 0.045, this.musicGain, this.nextMusicAt);
         this.nextMusicAt += 0.32;
       }
     }
@@ -552,13 +557,13 @@
         data[p + 2] = Math.round(48 + shade * 1.4);
         data[p + 3] = 255;
       } else {
-        const edge = this.isPaintEdge(i, code) ? 16 : 0;
-        const sheen = this.detail[(i * 17 + 13) % this.size] > 226 ? 10 : 0;
-        const shade = grain * 7 + edge + sheen;
-        const mix = 0.52 + s * 0.48;
-        data[p] = clamp(Math.round(lerp(28, c.r, mix) + shade), 0, 255);
-        data[p + 1] = clamp(Math.round(lerp(30, c.g, mix) + shade), 0, 255);
-        data[p + 2] = clamp(Math.round(lerp(50, c.b, mix) + shade * 0.75), 0, 255);
+        const edge = this.isPaintEdge(i, code) ? 18 : 0;
+        const sheen = this.detail[(i * 17 + 13) % this.size] > 218 ? 13 : 0;
+        const shade = grain * 5 + edge + sheen;
+        const mix = 0.68 + s * 0.32;
+        data[p] = clamp(Math.round(lerp(20, c.r, mix) + shade), 0, 255);
+        data[p + 1] = clamp(Math.round(lerp(22, c.g, mix) + shade), 0, 255);
+        data[p + 2] = clamp(Math.round(lerp(38, c.b, mix) + shade * 0.65), 0, 255);
         data[p + 3] = 255;
       }
     }
@@ -579,6 +584,10 @@
       }
       this.netDirty.splice(0, n);
       return out;
+    }
+    clearOutgoingDeltas() {
+      for (const i of this.netDirty) this.netDirtyFlag[i] = 0;
+      this.netDirty = [];
     }
     fullSnapshot() {
       return {
@@ -896,7 +905,7 @@
     }
     createPeer(id, makeOffer) {
       const pc = new RTCPeerConnection({ iceServers: CONFIG.ICE_SERVERS });
-      const state = { id, pc, dc: null, open: false, lastInputAt: 0 };
+      const state = { id, pc, dc: null, open: false, lastInputAt: 0, pendingIce: [] };
       this.peers.set(id, state);
       pc.onicecandidate = (ev) => { if (ev.candidate) this.signal.sendSignal(id, 'ice', ev.candidate); };
       pc.onconnectionstatechange = () => {
@@ -939,17 +948,29 @@
       try {
         if (type === 'offer') {
           await pc.setRemoteDescription(new RTCSessionDescription(data));
+          await this.flushPendingIce(peer);
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           this.signal.sendSignal(from, 'answer', pc.localDescription);
         } else if (type === 'answer') {
           if (!pc.remoteDescription) await pc.setRemoteDescription(new RTCSessionDescription(data));
+          await this.flushPendingIce(peer);
         } else if (type === 'ice') {
-          await pc.addIceCandidate(new RTCIceCandidate(data));
+          const candidate = new RTCIceCandidate(data);
+          if (!pc.remoteDescription) {
+            peer.pendingIce.push(candidate);
+            return;
+          }
+          await pc.addIceCandidate(candidate);
         }
       } catch (err) {
-        this.game.toast(`WebRTC ${type} failed: ${err.message || err}`);
+        if (type !== 'ice' || !peer.open) this.game.toast(`WebRTC ${type} failed: ${err.message || err}`);
       }
+    }
+    async flushPendingIce(peer) {
+      if (!peer?.pc?.remoteDescription || !peer.pendingIce?.length) return;
+      const pending = peer.pendingIce.splice(0);
+      for (const candidate of pending) await peer.pc.addIceCandidate(candidate);
     }
     send(id, msg) {
       const peer = this.peers.get(id);
@@ -1021,6 +1042,7 @@
       this.networkAttempt = 0;
 
       this.setupUi();
+      this.setupAudioGuards();
       this.resize();
       window.addEventListener('resize', () => this.resize());
       requestAnimationFrame((t) => this.loop(t));
@@ -1047,6 +1069,17 @@
         this.resize();
       };
       $('roomInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); });
+    }
+    setupAudioGuards() {
+      const resume = () => {
+        if (this.juice.enabled) this.juice.unlock();
+      };
+      ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(type => {
+        window.addEventListener(type, resume, { capture: true, passive: true });
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) resume();
+      });
     }
     toast(text, ms) { this.toasts.show(text, ms); }
     resize() {
@@ -1167,6 +1200,7 @@
       this.mesh = new PeerMesh(this, this.signal, isHost);
       this.mesh.on('message', ({ from, msg }) => this.onPeerMessage(from, msg));
       this.mesh.on('open', (id) => {
+        this.toasts.clear(/Connected to signaling|Waiting for host|WebRTC/i);
         this.toast(isHost ? 'Friend connected!' : 'Connected to host.');
         if (!isHost) this.hideModal();
         this.updateNetStatus();
@@ -1410,20 +1444,34 @@
         for (const sp of msg.players) {
           seen.add(sp.id);
           let p = this.players.get(sp.id);
+          let firstNetworkState = false;
           if (!p) {
             p = this.makePlayer(sp.id, sp.name, sp.color, !!sp.isBot);
             p.code = sp.code;
             this.nextCode = Math.max(this.nextCode, p.code + 1);
             this.paint.ensurePalette(p.code, p.color);
             this.players.set(sp.id, p);
+            firstNetworkState = true;
           }
+          firstNetworkState = firstNetworkState || p.netSeenAt === undefined;
           p.code = sp.code;
           p.name = sp.name;
           p.color = sp.color;
           p.targetX = sp.x; p.targetY = sp.y; p.targetVx = sp.vx; p.targetVy = sp.vy;
-          p.x = p.x ? lerp(p.x, sp.x, 0.42) : sp.x;
-          p.y = p.y ? lerp(p.y, sp.y, 0.42) : sp.y;
-          p.vx = sp.vx; p.vy = sp.vy; p.r = sp.r; p.boost = sp.boost;
+          p.netSeenAt = performance.now();
+          if (firstNetworkState) {
+            p.x = sp.x; p.y = sp.y; p.vx = sp.vx; p.vy = sp.vy;
+          } else if (p.id === this.myId) {
+            const correction = dist2(p.x, p.y, sp.x, sp.y) > 220 * 220 ? 0.6 : 0.12;
+            p.x = lerp(p.x, sp.x, correction);
+            p.y = lerp(p.y, sp.y, correction);
+            p.vx = lerp(p.vx, sp.vx, 0.22);
+            p.vy = lerp(p.vy, sp.vy, 0.22);
+          } else {
+            p.vx = lerp(p.vx, sp.vx, 0.28);
+            p.vy = lerp(p.vy, sp.vy, 0.28);
+          }
+          p.r = sp.r; p.boost = sp.boost;
           p.alive = sp.alive; p.respawn = sp.respawn; p.isBot = sp.isBot; p.score = sp.score || 0;
         }
       }
@@ -1486,25 +1534,38 @@
       this.networkHost(dt);
     }
     tickClient(dt) {
+      const s = this.input.getState();
+      const me = this.players.get(this.myId);
+      if (me && !this.roundOver) {
+        me.input = s;
+        this.updatePlayer(me, dt);
+        this.paint.clearOutgoingDeltas();
+      }
       this.accumInput += dt;
       if (this.accumInput >= 1 / CONFIG.CLIENT_INPUT_HZ) {
         this.accumInput = 0;
-        const s = this.input.getState();
         this.juice.boost(s.boost && Math.hypot(s.x, s.y) > 0.1);
         this.mesh?.broadcast({ type: 'input', x: s.x, y: s.y, boost: s.boost });
       }
-      // Soft interpolation toward network targets.
       for (const p of this.players.values()) {
-        if (p.targetX !== undefined) {
-          p.x = lerp(p.x, p.targetX, 0.12);
-          p.y = lerp(p.y, p.targetY, 0.12);
-        }
+        if (p.id !== this.myId) this.smoothNetworkPlayer(p, dt);
       }
       if (this.mesh && this.mesh.countOpen() === 0 && this.mode === 'client') {
         // Keep the modal friendly if WebRTC takes longer than signaling.
         this.updateModal('Waiting for host…', 'Signaling is connected. Waiting for the host to create the WebRTC data channel.', 'If this never changes, the signaling server protocol may differ from this prototype. See docs/NETWORKING.md.');
         $('modal').classList.remove('hidden');
       }
+    }
+    smoothNetworkPlayer(p, dt) {
+      if (p.targetX === undefined || !p.alive) return;
+      const age = clamp((performance.now() - (p.netSeenAt || performance.now())) / 1000, 0, 0.24);
+      const px = clamp(p.targetX + (p.targetVx || 0) * age * 0.62, p.r, CONFIG.WORLD_W - p.r);
+      const py = clamp(p.targetY + (p.targetVy || 0) * age * 0.62, p.r, CONFIG.WORLD_H - p.r);
+      const blend = 1 - Math.pow(0.00055, dt);
+      p.x = lerp(p.x, px, blend);
+      p.y = lerp(p.y, py, blend);
+      p.vx = lerp(p.vx, p.targetVx || 0, blend);
+      p.vy = lerp(p.vy, p.targetVy || 0, blend);
     }
     updatePlayer(p, dt) {
       if (!p.alive) {
@@ -1552,8 +1613,8 @@
       if (p.x > CONFIG.WORLD_W - p.r) { p.x = CONFIG.WORLD_W - p.r; p.vx = -Math.abs(p.vx) * 0.45; }
       if (p.y > CONFIG.WORLD_H - p.r) { p.y = CONFIG.WORLD_H - p.r; p.vy = -Math.abs(p.vy) * 0.45; }
 
-      const paintRadius = p.r * (wantsBoost ? 1.08 : 0.93);
-      const gained = this.depositPaintTrail(p, beforeX, beforeY, p.x, p.y, paintRadius, dt, wantsBoost ? 1.32 : 1);
+      const paintRadius = p.r * (wantsBoost ? 1.22 : 1.08);
+      const gained = this.depositPaintTrail(p, beforeX, beforeY, p.x, p.y, paintRadius, dt, wantsBoost ? 2.05 : 1.55);
       if (p.id === this.myId) {
         this.juice.boost(wantsBoost);
         if (gained > 0) this.juice.paint(gained);
