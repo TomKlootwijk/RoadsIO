@@ -58,7 +58,7 @@ POST /rooms
   "hostPeerId": "host-id",
   "maxPeers": 8,
   "gameVersion": "0.1.0-prototype",
-  "contentHash": "paint-rush-io-v1"
+  "contentHash": "roads-splash-io-v1"
 }
 ```
 
@@ -70,7 +70,7 @@ POST /rooms/ABC123/join
   "peerId": "client-id",
   "displayName": "Painter",
   "gameVersion": "0.1.0-prototype",
-  "contentHash": "paint-rush-io-v1"
+  "contentHash": "roads-splash-io-v1"
 }
 ```
 
@@ -92,7 +92,7 @@ Peers long-poll for messages:
 GET /rooms/ABC123/signals?peerId=client-id&since=12&timeoutMs=25000
 ```
 
-Signal kinds used by Paint Rush:
+Signal kinds used by RoadsSplash.io:
 
 - `join`
 - `offer`
@@ -107,7 +107,7 @@ The client defaults to:
 ```js
 SIGNALING_URL: 'https://runevalesignaling.onrender.com'
 SIGNALING_MODE: 'http'
-SIGNALING_CONTENT_HASH: 'paint-rush-io-v1'
+SIGNALING_CONTENT_HASH: 'roads-splash-io-v1'
 ```
 
 The server lives at `C:\Users\Tom\Documents\CODEX Projects\RuneValeSignaling` during local development and exposes `/healthz`, `/rooms`, `/rooms/:roomCode/join`, and `/rooms/:roomCode/signals`.

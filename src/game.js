@@ -2,7 +2,7 @@
   'use strict';
 
   /**
-   * Paint Rush.io
+   * RoadsSplash.io
    * A tiny canvas/WebRTC territory game. It is intentionally dependency-free for
    * GitHub Pages. Signaling uses the RuneVale HTTP long-poll room mailbox only
    * to exchange WebRTC SDP/ICE messages; gameplay runs over DataChannels.
@@ -12,7 +12,7 @@
     VERSION: '0.1.0-prototype',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
-    SIGNALING_CONTENT_HASH: 'paint-rush-io-v1',
+    SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
 
     WORLD_W: 1680,
     WORLD_H: 1050,
@@ -771,7 +771,7 @@
       };
       pc.ondatachannel = (ev) => this.attachDataChannel(state, ev.channel);
       if (makeOffer) {
-        const dc = pc.createDataChannel('paint-rush', { ordered: true });
+        const dc = pc.createDataChannel('roads-splash', { ordered: true });
         this.attachDataChannel(state, dc);
         pc.createOffer()
           .then(offer => pc.setLocalDescription(offer))

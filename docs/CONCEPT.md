@@ -1,8 +1,8 @@
-# Paint Rush.io Concept
+# RoadsSplash.io Concept
 
 ## One-sentence pitch
 
-**Paint Rush.io** is a fast casual territory game where rolling paint balls race to cover the arena, steal enemy paint, and splat rivals before the timer ends.
+**RoadsSplash.io** is a fast casual territory game where rolling paint balls race to cover the arena, steal enemy paint, and splat rivals before the timer ends.
 
 ## Design pillars
 

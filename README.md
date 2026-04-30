@@ -1,4 +1,4 @@
-# Paint Rush.io
+# RoadsSplash.io
 
 A polished prototype for a casual `.io` territory game: roll a paint ball, convert enemy paint, boost into fights, and win by owning the most map after a three-minute round.
 
@@ -17,7 +17,7 @@ The game also includes bots, so it is playable solo or with only two humans.
 Because the game uses normal browser APIs and relative files, the safest local test is a tiny static server:
 
 ```bash
-cd paint-rush-io
+cd RoadsIO
 python3 -m http.server 8080
 # open http://localhost:8080
 ```
