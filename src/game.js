@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.0-stability-juice',
+    VERSION: '0.2.1-lobby-start-stability',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -56,9 +56,10 @@
     BOOST_SHAKE: 1.25,
     SPLAT_SHAKE: 22,
     OWN_SPLAT_SHAKE: 30,
-    HOST_SNAPSHOT_HZ: 22,
-    CLIENT_INPUT_HZ: 40,
+    HOST_SNAPSHOT_HZ: 16,
+    CLIENT_INPUT_HZ: 30,
     FULL_GRID_SECONDS: 4,
+    NET_BUFFER_LIMIT: 220000,
 
     ICE_SERVERS: [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -765,6 +766,9 @@
       }
     }
     close() {
+      if (this.connected && this.room) {
+        this.sendSignal(this.hostPeerId || '*', 'bye', { peerId: this.id }).catch(() => {});
+      }
       this.cancelled = true;
       try { this.pollAbort?.abort(); } catch (_) {}
       this.connected = false;
@@ -957,7 +961,11 @@
     }
     onPeer(peer) {
       if (!peer.id || peer.id === this.signal.id) return;
-      if (this.peers.has(peer.id)) return;
+      if (this.peers.has(peer.id)) {
+        const existing = this.peers.get(peer.id);
+        if (existing?.open || !this.isHost) return;
+        this.removePeer(peer.id, true);
+      }
       if (this.isHost) this.createPeer(peer.id, true);
     }
     createPeer(id, makeOffer) {
@@ -971,19 +979,15 @@
           if (state.disconnectTimer) clearTimeout(state.disconnectTimer);
           state.disconnectTimer = null;
         } else if (stateNow === 'disconnected') {
-          if (!state.disconnectTimer) {
-            state.disconnectTimer = setTimeout(() => {
-              state.disconnectTimer = null;
-              if (pc.connectionState === 'disconnected') this.removePeer(id, false);
-            }, 5000);
-          }
+          state.open = state.dc?.readyState === 'open';
+          this.emit('soft-disconnect', id);
         } else if (stateNow === 'failed' || stateNow === 'closed') {
           this.removePeer(id, false);
         }
       };
       pc.ondatachannel = (ev) => this.attachDataChannel(state, ev.channel);
       if (makeOffer) {
-        const dc = pc.createDataChannel('roads-splash', { ordered: true });
+        const dc = pc.createDataChannel('roads-splash', { ordered: false, maxRetransmits: 0 });
         this.attachDataChannel(state, dc);
         pc.createOffer()
           .then(offer => pc.setLocalDescription(offer))
@@ -1047,6 +1051,7 @@
     send(id, msg) {
       const peer = this.peers.get(id);
       if (!peer?.dc || peer.dc.readyState !== 'open') return false;
+      if ((msg?.type === 'snapshot' || msg?.type === 'input' || msg?.type === 'event') && peer.dc.bufferedAmount > CONFIG.NET_BUFFER_LIMIT) return false;
       try { peer.dc.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
     }
     broadcast(msg) {
@@ -1093,6 +1098,7 @@
       this.bots = new Map();
       this.nextCode = 1;
       this.matchTime = CONFIG.ROUND_SECONDS;
+      this.roundActive = false;
       this.roundOver = false;
       this.winner = null;
       this.roundOverTimer = 0;
@@ -1114,6 +1120,8 @@
       this.signal = null;
       this.mesh = null;
       this.networkAttempt = 0;
+      this.reconnectTimer = null;
+      this.reconnecting = false;
       this.lobbyRooms = [];
       this.lobbyLoading = false;
       this.lastLobbyAt = 0;
@@ -1126,6 +1134,15 @@
       requestAnimationFrame((t) => this.loop(t));
     }
     setupUi() {
+      if (!$('startRoundBtn')) {
+        const btn = document.createElement('button');
+        btn.id = 'startRoundBtn';
+        btn.className = 'round-btn host-only hidden';
+        btn.title = 'Start round';
+        btn.setAttribute('aria-label', 'Start round');
+        btn.textContent = 'Start';
+        $('controls').insertBefore(btn, $('addBotBtn'));
+      }
       $('nameInput').value = this.playerName;
       $('qualitySelect').value = this.quality;
       $('soloBtn').onclick = () => this.startLocal();
@@ -1140,6 +1157,7 @@
         this.toast(on ? 'Sound on' : 'Sound off');
       };
       $('soundBtn').textContent = this.juice.enabled ? '♪' : '×';
+      $('startRoundBtn').onclick = () => this.startHostedRound();
       $('addBotBtn').onclick = () => this.addBotButton();
       $('menuBtn').onclick = () => this.leaveToMenu();
       $('qualitySelect').onchange = () => {
@@ -1268,13 +1286,14 @@
         this.isHost = true;
         this.resetGame();
         this.createHuman(this.myId, this.playerName, CONFIG.COLORS[0]);
-        for (let i = 0; i < this.selectedBotCount(); i++) this.addBot();
-        this.startRound();
+        this.roundActive = false;
         this.showGameUi();
         this.showRoomBadge(this.roomCode);
         this.showRoomFlash(this.roomCode);
         this.hideModal();
-        this.toast(`Room ${this.roomCode} is ready. Share the code with friends.`, 4200);
+        this.showWaitingBanner();
+        this.sendFullSnapshot();
+        this.toast(`Room ${this.roomCode} is ready. Press Start when everyone is in.`, 5200);
       } catch (err) {
         if (attempt !== this.networkAttempt || /cancel/i.test(String(err?.message || err))) return;
         this.closeNetwork();
@@ -1297,6 +1316,16 @@
           'Back to menu'
         );
       }
+    }
+    startHostedRound() {
+      if (!this.isHost || this.mode !== 'host') return;
+      if (this.roundActive && !this.roundOver) return;
+      if (this.bots.size === 0) {
+        for (let i = 0; i < this.selectedBotCount(); i++) this.addBot();
+      }
+      this.startRound();
+      this.sendFullSnapshot();
+      this.updateHostControls();
     }
     async joinRoom(codeOverride = null) {
       this.readMenuName();
@@ -1338,12 +1367,17 @@
       });
       this.mesh.on('close', (id) => {
         if (isHost) this.removePlayer(id);
+        else this.scheduleClientReconnect();
         this.updateNetStatus();
       });
       this.signal.startPolling();
       this.updateNetStatus();
     }
     closeNetwork() {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
       this.closeHostedRoom();
       this.mesh?.close();
       this.mesh = null;
@@ -1360,6 +1394,29 @@
           keepalive: true
         }).catch(() => {});
       } catch (_) {}
+    }
+    scheduleClientReconnect() {
+      if (this.isHost || this.mode !== 'client' || !this.roomCode || this.reconnectTimer || this.reconnecting) return;
+      const room = this.roomCode;
+      this.showModal('Reconnecting...', `Trying to rejoin room ${room}.`, 'The game is keeping your place while WebRTC recovers.');
+      this.reconnectTimer = setTimeout(async () => {
+        this.reconnectTimer = null;
+        if (this.mode !== 'client' || this.isHost || this.roomCode !== room) return;
+        this.reconnecting = true;
+        try {
+          this.closeNetwork();
+          this.mode = 'client';
+          this.isHost = false;
+          this.roomCode = room;
+          this.showRoomBadge(room);
+          await this.openNetwork(room, false);
+          this.toast('Reconnected to host.', 2200);
+        } catch (err) {
+          this.updateModal('Reconnect failed', `Could not rejoin room ${room}.`, String(err?.message || err));
+        } finally {
+          this.reconnecting = false;
+        }
+      }, 1400);
     }
     leaveToMenu(close = true) {
       this.networkAttempt++;
@@ -1387,7 +1444,13 @@
       $('minimap').classList.remove('hidden');
       $('touchControls').classList.remove('hidden');
       $('addBotBtn').classList.toggle('hidden', !this.isHost);
+      this.updateHostControls();
       this.updateNetStatus();
+    }
+    updateHostControls() {
+      const start = $('startRoundBtn');
+      if (start) start.classList.toggle('hidden', !(this.isHost && this.mode === 'host' && (!this.roundActive || this.roundOver)));
+      $('addBotBtn').classList.toggle('hidden', !(this.isHost && this.mode === 'host' && !this.roundActive));
     }
     showRoomBadge(code) {
       const el = $('roomBadge');
@@ -1431,6 +1494,11 @@
       let text = 'Local';
       if (this.mode === 'host') text = `Host · ${this.mesh?.countOpen() || 0} friend${(this.mesh?.countOpen() || 0) === 1 ? '' : 's'}`;
       if (this.mode === 'client') text = this.mesh?.countOpen() ? 'Connected · WebRTC' : 'Waiting for host';
+      if (this.mode === 'host') {
+        const open = this.mesh?.countOpen() || 0;
+        text = `${this.roundActive ? 'Live' : 'Lobby'} - ${open} friend${open === 1 ? '' : 's'}`;
+      }
+      if (this.mode === 'client') text = this.mesh?.countOpen() ? (this.roundActive ? 'Connected - WebRTC' : 'Waiting for start') : 'Reconnecting...';
       $('netStatus').textContent = text;
       if (this.roomCode && this.mode !== 'menu' && this.mode !== 'local') this.showRoomBadge(this.roomCode);
       else if (!this.roomCode || this.mode === 'local') this.hideRoomBadge();
@@ -1441,6 +1509,7 @@
       this.bots.clear();
       this.nextCode = 1;
       this.matchTime = CONFIG.ROUND_SECONDS;
+      this.roundActive = false;
       this.roundOver = false;
       this.roundOverTimer = 0;
       this.winner = null;
@@ -1452,6 +1521,7 @@
     startRound() {
       this.paint.clear(false);
       this.matchTime = CONFIG.ROUND_SECONDS;
+      this.roundActive = true;
       this.roundOver = false;
       this.roundOverTimer = 0;
       this.winner = null;
@@ -1467,6 +1537,16 @@
       this.juice.beep(523, 0.07, 'triangle', 0.04);
       this.juice.beep(784, 0.08, 'triangle', 0.035);
       this.toast('Round start! Claim everything.', 1800);
+      this.updateHostControls();
+    }
+    showWaitingBanner() {
+      this.centerBanner = {
+        title: 'Room ready',
+        subtitle: this.isHost ? 'Press Start when everyone joins' : 'Waiting for host to start',
+        color: '#ffd166',
+        life: 999,
+        maxLife: 999
+      };
     }
     createHuman(id, name, color) {
       const p = this.makePlayer(id, name, color, false);
@@ -1504,6 +1584,7 @@
     }
     addBotButton() {
       if (!this.isHost) return;
+      if (this.roundActive) { this.toast('Bots can join before the round starts.'); return; }
       if (this.bots.size >= CONFIG.MAX_BOTS) { this.toast('Bot cap reached.'); return; }
       this.addBot();
       this.toast('Bot added.');
@@ -1525,7 +1606,20 @@
       if (!p) return;
       this.players.delete(id);
       this.bots.delete(id);
+      this.removeRoomPeer(id);
       this.toast(`${p.name} left the room.`);
+      this.sendFullSnapshot();
+    }
+    removeRoomPeer(id) {
+      if (!this.isHost || !this.roomCode || !id || id === this.myId || !window.fetch) return;
+      try {
+        fetch(`${CONFIG.SIGNALING_URL}/rooms/${encodeURIComponent(this.roomCode)}/peers/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hostPeerId: this.myId }),
+          keepalive: true
+        }).catch(() => {});
+      } catch (_) {}
     }
 
     onPeerMessage(from, msg) {
@@ -1534,7 +1628,7 @@
           if (!this.players.has(from) && this.players.size < CONFIG.MAX_PLAYERS) {
             const color = CONFIG.COLORS[(this.players.size) % CONFIG.COLORS.length];
             const p = this.createHuman(from, msg.name || 'Friend', color);
-            this.paint.paintCircle(p.x, p.y, 92, p.code, 1, 2.5);
+            if (this.roundActive) this.paint.paintCircle(p.x, p.y, 92, p.code, 1, 2.5);
             this.toast(`${p.name} joined!`);
             this.sendFullSnapshot();
           } else {
@@ -1592,6 +1686,7 @@
         full,
         room: this.roomCode,
         matchTime: Math.round(this.matchTime * 100) / 100,
+        roundActive: this.roundActive,
         roundOver: this.roundOver,
         winner: this.winner ? { code: this.winner.code, name: this.winner.name } : null,
         players,
@@ -1602,6 +1697,7 @@
     applySnapshot(msg) {
       const becameRoundOver = !this.roundOver && !!msg.roundOver;
       this.matchTime = msg.matchTime ?? this.matchTime;
+      this.roundActive = !!msg.roundActive;
       this.roundOver = !!msg.roundOver;
       this.winner = msg.winner;
       const seen = new Set();
@@ -1647,6 +1743,10 @@
       if (becameRoundOver && this.winner) {
         this.showRoundBanner(this.winner);
         this.juice.roundEnd();
+      } else if (!this.roundActive && !this.roundOver && this.mode !== 'menu') {
+        this.showWaitingBanner();
+      } else if (this.roundActive && !this.roundOver && this.centerBanner?.title === 'Room ready') {
+        this.centerBanner = null;
       }
       this.hideModal();
     }
@@ -1687,9 +1787,19 @@
       requestAnimationFrame((nt) => this.loop(nt));
     }
     tickHost(dt) {
+      if (!this.roundActive) {
+        const myInput = this.input.getState();
+        const me = this.players.get(this.myId);
+        if (me) me.input = myInput;
+        this.juice.boost(false);
+        this.networkHost(dt);
+        this.updateHostControls();
+        return;
+      }
       if (this.roundOver) {
-        this.roundOverTimer -= dt;
-        if (this.roundOverTimer <= 0) this.startRound();
+        this.networkHost(dt);
+        this.updateHostControls();
+        return;
       } else {
         this.matchTime -= dt;
         if (this.matchTime <= 0) this.endRound();
@@ -1706,7 +1816,7 @@
     tickClient(dt) {
       const s = this.input.getState();
       const me = this.players.get(this.myId);
-      if (me && !this.roundOver) {
+      if (me && this.roundActive && !this.roundOver) {
         me.input = s;
         this.updatePlayer(me, dt);
         this.paint.clearOutgoingDeltas();
@@ -1714,7 +1824,7 @@
       this.accumInput += dt;
       if (this.accumInput >= 1 / CONFIG.CLIENT_INPUT_HZ) {
         this.accumInput = 0;
-        this.juice.boost(s.boost && Math.hypot(s.x, s.y) > 0.1);
+        this.juice.boost(this.roundActive && !this.roundOver && s.boost && Math.hypot(s.x, s.y) > 0.1);
         this.mesh?.broadcast({ type: 'input', x: s.x, y: s.y, boost: s.boost });
       }
       for (const p of this.players.values()) {
@@ -1902,6 +2012,7 @@
       live.sort((a, b) => this.paint.getCells(b.code) - this.paint.getCells(a.code));
       this.winner = live[0] || null;
       this.roundOver = true;
+      this.roundActive = false;
       this.roundOverTimer = 5;
       if (this.winner) {
         this.showRoundBanner(this.winner);
@@ -1909,6 +2020,7 @@
         this.burst(this.winner.x, this.winner.y, this.winner.color, 80, 2);
       }
       this.sendFullSnapshot();
+      this.updateHostControls();
     }
     showRoundBanner(winner) {
       if (!winner) return;
@@ -2283,7 +2395,8 @@
     updateHud() {
       if (this.mode === 'menu') return;
       $('timer').textContent = formatTime(this.matchTime);
-      if (this.roundOver && this.winner) $('roundState').textContent = `${this.winner.name || 'Winner'} wins · next round soon`;
+      if (!this.roundActive && !this.roundOver) $('roundState').textContent = this.isHost ? 'Waiting - press Start' : 'Waiting for host';
+      else if (this.roundOver && this.winner) $('roundState').textContent = `${this.winner.name || 'Winner'} wins - host starts next`;
       else $('roundState').textContent = this.isHost ? 'Paint, boost, splat' : 'Connected to host';
       const me = this.players.get(this.myId);
       $('boostFill').style.width = `${Math.round((me?.boost ?? 0) * 100)}%`;
