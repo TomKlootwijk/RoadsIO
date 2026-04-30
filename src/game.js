@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.7-round-paint-reset',
+    VERSION: '0.2.8-round-paint-ordering',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -770,7 +770,13 @@
       for (const d of deltas) {
         const i = d[0] | 0;
         if (i < 0 || i >= this.size) continue;
-        this.owner[i] = d[1] | 0;
+        const old = this.owner[i];
+        const code = d[1] | 0;
+        if (old !== code) {
+          if (old) this.counts.set(old, Math.max(0, (this.counts.get(old) || 0) - 1));
+          if (code) this.counts.set(code, (this.counts.get(code) || 0) + 1);
+        }
+        this.owner[i] = code;
         this.strength[i] = d[2] | 0;
         // Network deltas received by clients should only dirty the renderer,
         // not get re-queued for outgoing network deltas.
@@ -1218,6 +1224,8 @@
       this.roundActive = false;
       this.roundOver = false;
       this.roundId = 0;
+      this.paintRoundId = 0;
+      this.paintResetRoundId = 0;
       this.winner = null;
       this.roundOverTimer = 0;
       this.centerBanner = null;
@@ -1675,6 +1683,8 @@
       this.roundActive = false;
       this.roundOver = false;
       this.roundId = 0;
+      this.paintRoundId = 0;
+      this.paintResetRoundId = 0;
       this.roundOverTimer = 0;
       this.winner = null;
       this.particles = [];
@@ -1685,6 +1695,8 @@
     startRound() {
       this.roundId = (this.roundId || 0) + 1;
       this.paint.clear(false);
+      this.paintRoundId = this.roundId;
+      this.paintResetRoundId = this.roundId;
       this.matchTime = CONFIG.ROUND_SECONDS;
       this.roundActive = true;
       this.roundOver = false;
@@ -1900,19 +1912,23 @@
         deltas
       };
     }
+    clearClientPaintForRound(roundId) {
+      if (!roundId || this.paintRoundId === roundId || this.paintResetRoundId === roundId) return;
+      this.paint.clear(true);
+      this.paintRoundId = roundId;
+      this.paintResetRoundId = roundId;
+      this.particles = [];
+      this.floaters = [];
+      this.shockwaves = [];
+    }
     applySnapshot(msg) {
       const wasRoundActive = this.roundActive;
       const wasRoundOver = this.roundOver;
       const incomingRoundId = Number.isFinite(Number(msg.roundId)) ? Number(msg.roundId) : this.roundId;
       const startsFreshRound = !!msg.roundActive && !msg.roundOver
         && (incomingRoundId !== this.roundId || (!wasRoundActive && wasRoundOver));
-      if (startsFreshRound) {
-        this.paint.clear(true);
-        this.particles = [];
-        this.floaters = [];
-        this.shockwaves = [];
-      }
-      const becameRoundOver = !this.roundOver && !!msg.roundOver;
+      if (startsFreshRound) this.clearClientPaintForRound(incomingRoundId);
+      const becameRoundOver = !wasRoundOver && !!msg.roundOver;
       this.roundId = incomingRoundId;
       this.matchTime = msg.matchTime ?? this.matchTime;
       this.roundActive = !!msg.roundActive;
@@ -1974,11 +1990,18 @@
     }
     applyPaintSnapshot(msg) {
       const paintRoundId = Number.isFinite(Number(msg?.roundId)) ? Number(msg.roundId) : this.roundId;
-      if (paintRoundId < this.roundId) return;
-      if (paintRoundId > this.roundId && !msg?.full) return;
-      if (paintRoundId > this.roundId) this.roundId = paintRoundId;
-      if (msg?.full && msg.grid) this.paint.applyFull(msg.grid);
-      if (msg?.deltas) this.paint.applyDeltas(msg.deltas);
+      const knownPaintRoundId = Math.max(this.roundId || 0, this.paintRoundId || 0);
+      if (paintRoundId < knownPaintRoundId) return;
+      if (paintRoundId > knownPaintRoundId && !msg?.full) return;
+      if (msg?.full && msg.grid) {
+        this.paint.applyFull(msg.grid);
+        this.paintRoundId = paintRoundId;
+        this.paintResetRoundId = Math.max(this.paintResetRoundId || 0, paintRoundId);
+      }
+      if (msg?.deltas) {
+        this.paint.applyDeltas(msg.deltas);
+        this.paintRoundId = paintRoundId;
+      }
     }
     applyEvent(event) {
       if (!event) return;
