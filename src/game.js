@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.8-round-paint-ordering',
+    VERSION: '0.2.9-round-delta-reset',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -1694,9 +1694,11 @@
     }
     startRound() {
       this.roundId = (this.roundId || 0) + 1;
-      this.paint.clear(false);
+      this.paint.clear(true);
       this.paintRoundId = this.roundId;
       this.paintResetRoundId = this.roundId;
+      this.accumPaintNet = 0;
+      this.accumFullGrid = 0;
       this.matchTime = CONFIG.ROUND_SECONDS;
       this.roundActive = true;
       this.roundOver = false;
