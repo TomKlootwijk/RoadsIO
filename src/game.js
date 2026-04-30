@@ -16,8 +16,8 @@
 
     WORLD_W: 1680,
     WORLD_H: 1050,
-    GRID_W: 96,
-    GRID_H: 60,
+    GRID_W: 280,
+    GRID_H: 175,
     ROUND_SECONDS: 180,
     MAX_PLAYERS: 14,
     MAX_BOTS: 10,
@@ -35,6 +35,9 @@
 
     PAINT_POWER: 255,
     CONVERT_POWER: 135,
+    TRAIL_DEPOSIT_STEP: 11,
+    COLLISION_PUSH: 0.22,
+    COLLISION_BOUNCE: 0.18,
     REINFORCE_POWER: 260,
     HOST_SNAPSHOT_HZ: 14,
     CLIENT_INPUT_HZ: 24,
@@ -136,6 +139,13 @@
     constructor() {
       this.enabled = localStorage.getItem('paintRush.sound') !== 'off';
       this.ctx = null;
+      this.musicGain = null;
+      this.sfxGain = null;
+      this.nextMusicAt = 0;
+      this.musicStep = 0;
+      this.lastPaintSound = 0;
+      this.boostOsc = null;
+      this.boostGain = null;
       this.shake = 0;
       this.flash = 0;
     }
@@ -143,35 +153,120 @@
       if (!this.enabled || this.ctx) return;
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (AudioContext) this.ctx = new AudioContext();
+        if (AudioContext) {
+          this.ctx = new AudioContext();
+          const master = this.ctx.createGain();
+          master.gain.value = 0.72;
+          master.connect(this.ctx.destination);
+          this.musicGain = this.ctx.createGain();
+          this.musicGain.gain.value = 0.18;
+          this.musicGain.connect(master);
+          this.sfxGain = this.ctx.createGain();
+          this.sfxGain.gain.value = 0.9;
+          this.sfxGain.connect(master);
+          this.nextMusicAt = this.ctx.currentTime + 0.08;
+        }
       } catch (_) {}
     }
     toggle() {
       this.enabled = !this.enabled;
       localStorage.setItem('paintRush.sound', this.enabled ? 'on' : 'off');
       if (this.enabled) this.unlock();
+      else this.stopBoost();
       return this.enabled;
     }
-    beep(freq = 420, dur = 0.055, type = 'sine', vol = 0.035) {
+    tone(freq = 420, dur = 0.08, type = 'sine', vol = 0.035, dest = this.sfxGain, at = null) {
       if (!this.enabled) return;
       this.unlock();
       const ctx = this.ctx;
       if (!ctx) return;
-      const t = ctx.currentTime;
+      const t = at ?? ctx.currentTime;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = type;
       osc.frequency.setValueAtTime(freq, t);
-      osc.frequency.exponentialRampToValueAtTime(Math.max(50, freq * 0.72), t + dur);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(50, freq * 0.86), t + dur);
       gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+      gain.gain.exponentialRampToValueAtTime(vol, t + 0.018);
       gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      osc.connect(gain).connect(ctx.destination);
+      osc.connect(gain).connect(dest || ctx.destination);
       osc.start(t);
       osc.stop(t + dur + 0.02);
     }
-    pop() { this.beep(140, 0.12, 'triangle', 0.05); this.beep(440, 0.08, 'sine', 0.03); this.shake = Math.max(this.shake, 14); this.flash = 0.18; }
-    tick(dt) { this.shake = Math.max(0, this.shake - dt * 42); this.flash = Math.max(0, this.flash - dt); }
+    beep(freq = 420, dur = 0.055, type = 'sine', vol = 0.035) { this.tone(freq, dur, type, vol); }
+    paint(amount = 1) {
+      if (!this.enabled || !this.ctx) return;
+      const t = this.ctx.currentTime;
+      if (t - this.lastPaintSound < 0.085) return;
+      this.lastPaintSound = t;
+      this.tone(520 + Math.min(18, amount) * 12, 0.038, 'triangle', 0.012);
+    }
+    boost(on) {
+      if (!this.enabled) return;
+      this.unlock();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      if (on && !this.boostOsc) {
+        this.boostOsc = ctx.createOscillator();
+        this.boostGain = ctx.createGain();
+        this.boostOsc.type = 'sawtooth';
+        this.boostOsc.frequency.value = 82;
+        this.boostGain.gain.value = 0.0001;
+        this.boostOsc.connect(this.boostGain).connect(this.sfxGain);
+        this.boostOsc.start();
+      }
+      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.018 : 0.0001, ctx.currentTime, 0.045);
+      if (!on && this.boostOsc) {
+        const osc = this.boostOsc;
+        const gain = this.boostGain;
+        this.boostOsc = null;
+        this.boostGain = null;
+        setTimeout(() => {
+          try { osc.stop(); osc.disconnect(); gain.disconnect(); } catch (_) {}
+        }, 180);
+      }
+    }
+    stopBoost() {
+      if (!this.boostOsc) return;
+      const osc = this.boostOsc;
+      const gain = this.boostGain;
+      this.boostOsc = null;
+      this.boostGain = null;
+      try { gain.gain.setTargetAtTime(0.0001, this.ctx?.currentTime || 0, 0.03); } catch (_) {}
+      setTimeout(() => {
+        try { osc.stop(); osc.disconnect(); gain.disconnect(); } catch (_) {}
+      }, 120);
+    }
+    pop() {
+      this.tone(130, 0.13, 'triangle', 0.06);
+      this.tone(430, 0.09, 'sine', 0.034);
+      this.shake = Math.max(this.shake, 14);
+      this.flash = 0.18;
+    }
+    roundEnd() {
+      if (!this.enabled) return;
+      this.unlock();
+      if (!this.ctx) return;
+      const t = this.ctx.currentTime;
+      [392, 494, 587, 784].forEach((f, i) => this.tone(f, 0.22, 'triangle', 0.04, this.sfxGain, t + i * 0.12));
+      this.tone(196, 0.55, 'sine', 0.05, this.sfxGain, t);
+      this.flash = Math.max(this.flash, 0.28);
+    }
+    tick(dt) {
+      this.shake = Math.max(0, this.shake - dt * 42);
+      this.flash = Math.max(0, this.flash - dt);
+      if (!this.enabled || !this.ctx || !this.musicGain) return;
+      if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+      const notes = [0, 3, 5, 7, 10, 7, 5, 3];
+      while (this.nextMusicAt < this.ctx.currentTime + 0.14) {
+        const step = this.musicStep++;
+        const note = notes[step % notes.length] + (step % 16 >= 8 ? 12 : 0);
+        const freq = 220 * Math.pow(2, note / 12);
+        this.tone(freq, 0.18, 'triangle', 0.012, this.musicGain, this.nextMusicAt);
+        if (step % 4 === 0) this.tone(freq / 2, 0.36, 'sine', 0.018, this.musicGain, this.nextMusicAt);
+        this.nextMusicAt += 0.32;
+      }
+    }
   }
 
   class InputManager {
@@ -288,6 +383,11 @@
       this.netDirty = [];
       this.netDirtyFlag = new Uint8Array(this.size);
       this.counts = new Map();
+      this.detail = new Uint8Array(this.size);
+      for (let i = 0; i < this.size; i++) {
+        const n = Math.sin(i * 12.9898 + (i % this.w) * 78.233) * 43758.5453;
+        this.detail[i] = Math.floor((n - Math.floor(n)) * 255);
+      }
       this.canvas = document.createElement('canvas');
       this.canvas.width = this.w;
       this.canvas.height = this.h;
@@ -311,15 +411,25 @@
     ensurePalette(code, hex) {
       if (!this.palette[code]) this.palette[code] = hexToRgb(hex || CONFIG.COLORS[code % CONFIG.COLORS.length]);
     }
-    markDirty(i) {
+    markRenderDirty(i) {
       if (!this.dirtyFlag[i]) {
         this.dirtyFlag[i] = 1;
         this.dirty.push(i);
       }
+    }
+    markDirty(i) {
+      this.markRenderDirty(i);
       if (!this.netDirtyFlag[i]) {
         this.netDirtyFlag[i] = 1;
         this.netDirty.push(i);
       }
+    }
+    markEdgeDirty(i) {
+      const cx = i % this.w;
+      if (cx > 0) this.markRenderDirty(i - 1);
+      if (cx < this.w - 1) this.markRenderDirty(i + 1);
+      if (i >= this.w) this.markRenderDirty(i - this.w);
+      if (i < this.size - this.w) this.markRenderDirty(i + this.w);
     }
     setOwner(i, code, strength = 96) {
       const old = this.owner[i];
@@ -333,6 +443,7 @@
       this.owner[i] = code;
       this.strength[i] = strength;
       this.markDirty(i);
+      this.markEdgeDirty(i);
       return old;
     }
     cellIndex(cx, cy) { return cy * this.w + cx; }
@@ -421,20 +532,33 @@
       const code = this.owner[i];
       const c = this.palette[code] || this.palette[0];
       const s = this.strength[i] / 255;
+      const grain = (this.detail[i] - 128) / 128;
       const p = i * 4;
       if (code === 0) {
-        data[p] = 23;
-        data[p + 1] = 27;
-        data[p + 2] = 48;
+        const shade = grain * 5;
+        data[p] = Math.round(23 + shade);
+        data[p + 1] = Math.round(27 + shade);
+        data[p + 2] = Math.round(48 + shade * 1.4);
         data[p + 3] = 255;
       } else {
-        data[p] = Math.round(lerp(30, c.r, 0.45 + s * 0.55));
-        data[p + 1] = Math.round(lerp(32, c.g, 0.45 + s * 0.55));
-        data[p + 2] = Math.round(lerp(54, c.b, 0.45 + s * 0.55));
+        const edge = this.isPaintEdge(i, code) ? 16 : 0;
+        const sheen = this.detail[(i * 17 + 13) % this.size] > 226 ? 10 : 0;
+        const shade = grain * 7 + edge + sheen;
+        const mix = 0.52 + s * 0.48;
+        data[p] = clamp(Math.round(lerp(28, c.r, mix) + shade), 0, 255);
+        data[p + 1] = clamp(Math.round(lerp(30, c.g, mix) + shade), 0, 255);
+        data[p + 2] = clamp(Math.round(lerp(50, c.b, mix) + shade * 0.75), 0, 255);
         data[p + 3] = 255;
       }
     }
-    consumeNetworkDeltas(limit = 12000) {
+    isPaintEdge(i, code) {
+      const cx = i % this.w;
+      return (cx > 0 && this.owner[i - 1] !== code)
+        || (cx < this.w - 1 && this.owner[i + 1] !== code)
+        || (i >= this.w && this.owner[i - this.w] !== code)
+        || (i < this.size - this.w && this.owner[i + this.w] !== code);
+    }
+    consumeNetworkDeltas(limit = 28000) {
       const out = [];
       const n = Math.min(limit, this.netDirty.length);
       for (let k = 0; k < n; k++) {
@@ -475,10 +599,8 @@
         this.strength[i] = d[2] | 0;
         // Network deltas received by clients should only dirty the renderer,
         // not get re-queued for outgoing network deltas.
-        if (!this.dirtyFlag[i]) {
-          this.dirtyFlag[i] = 1;
-          this.dirty.push(i);
-        }
+        this.markRenderDirty(i);
+        this.markEdgeDirty(i);
       }
     }
   }
@@ -869,6 +991,7 @@
       this.roundOver = false;
       this.winner = null;
       this.roundOverTimer = 0;
+      this.centerBanner = null;
       this.particles = [];
       this.floaters = [];
       this.camera = { x: CONFIG.WORLD_W / 2, y: CONFIG.WORLD_H / 2, zoom: 1 };
@@ -937,6 +1060,7 @@
       return Math.min(small || slow ? 1 : 1.5, raw);
     }
     readMenuName() {
+      this.juice.unlock();
       this.playerName = safeName($('nameInput').value, 'Painter');
       localStorage.setItem('paintRush.name', this.playerName);
       return this.playerName;
@@ -1125,6 +1249,7 @@
       this.roundOver = false;
       this.roundOverTimer = 0;
       this.winner = null;
+      this.centerBanner = null;
       let i = 0;
       for (const p of this.players.values()) {
         this.spawnPlayer(p, i++);
@@ -1256,6 +1381,7 @@
       };
     }
     applySnapshot(msg) {
+      const becameRoundOver = !this.roundOver && !!msg.roundOver;
       this.matchTime = msg.matchTime ?? this.matchTime;
       this.roundOver = !!msg.roundOver;
       this.winner = msg.winner;
@@ -1284,6 +1410,10 @@
       for (const id of Array.from(this.players.keys())) if (!seen.has(id)) this.players.delete(id);
       if (msg.full && msg.grid) this.paint.applyFull(msg.grid);
       if (msg.deltas) this.paint.applyDeltas(msg.deltas);
+      if (becameRoundOver && this.winner) {
+        this.showRoundBanner(this.winner);
+        this.juice.roundEnd();
+      }
       this.hideModal();
     }
     applyEvent(event) {
@@ -1300,13 +1430,20 @@
       this.lastTick = t;
       this.fps = lerp(this.fps, 1 / Math.max(0.001, rawDt), 0.04);
       this.juice.tick(rawDt);
+      if (this.centerBanner) {
+        this.centerBanner.life -= rawDt;
+        if (this.centerBanner.life <= 0) this.centerBanner = null;
+      }
 
       if (this.mode !== 'menu') {
         if (this.isHost) this.tickHost(rawDt);
         else this.tickClient(rawDt);
         this.tickParticles(rawDt);
+      } else {
+        this.juice.boost(false);
       }
-      this.paint.updateCanvas(this.quality === 'low' ? 1800 : 5600);
+      const paintBudget = this.quality === 'low' ? 12000 : this.quality === 'medium' ? 26000 : 52000;
+      this.paint.updateCanvas(paintBudget);
       this.render(rawDt);
       this.updateHud();
       requestAnimationFrame((nt) => this.loop(nt));
@@ -1333,6 +1470,7 @@
       if (this.accumInput >= 1 / CONFIG.CLIENT_INPUT_HZ) {
         this.accumInput = 0;
         const s = this.input.getState();
+        this.juice.boost(s.boost && Math.hypot(s.x, s.y) > 0.1);
         this.mesh?.broadcast({ type: 'input', x: s.x, y: s.y, boost: s.boost });
       }
       // Soft interpolation toward network targets.
@@ -1350,6 +1488,7 @@
     }
     updatePlayer(p, dt) {
       if (!p.alive) {
+        if (p.id === this.myId) this.juice.boost(false);
         p.respawn -= dt;
         if (p.respawn <= 0) {
           p.alive = true;
@@ -1373,6 +1512,8 @@
       if (wantsBoost) p.boost = Math.max(0, p.boost - CONFIG.BOOST_DRAIN * dt);
       else p.boost = Math.min(1, p.boost + CONFIG.BOOST_REGEN * dt);
 
+      const beforeX = p.x;
+      const beforeY = p.y;
       p.vx += ix * CONFIG.ACCEL * dt * boostMul;
       p.vy += iy * CONFIG.ACCEL * dt * boostMul;
       const speed = Math.hypot(p.vx, p.vy);
@@ -1392,7 +1533,11 @@
       if (p.y > CONFIG.WORLD_H - p.r) { p.y = CONFIG.WORLD_H - p.r; p.vy = -Math.abs(p.vy) * 0.45; }
 
       const paintRadius = p.r * (wantsBoost ? 1.08 : 0.93);
-      const gained = this.paint.paintCircle(p.x, p.y, paintRadius, p.code, dt, wantsBoost ? 1.28 : 1);
+      const gained = this.depositPaintTrail(p, beforeX, beforeY, p.x, p.y, paintRadius, dt, wantsBoost ? 1.32 : 1);
+      if (p.id === this.myId) {
+        this.juice.boost(wantsBoost);
+        if (gained > 0) this.juice.paint(gained);
+      }
       if (gained > 0) {
         p.boost = Math.min(1, p.boost + gained * CONFIG.BOOST_PAINT_REWARD);
         p.combo += gained;
@@ -1407,6 +1552,16 @@
         p.lastPaintX = p.x; p.lastPaintY = p.y;
       }
     }
+    depositPaintTrail(p, x0, y0, x1, y1, radius, dt, powerScale) {
+      const d = Math.hypot(x1 - x0, y1 - y0);
+      const steps = clamp(Math.ceil(d / CONFIG.TRAIL_DEPOSIT_STEP), 1, 14);
+      let gained = 0;
+      for (let i = 1; i <= steps; i++) {
+        const t = i / steps;
+        gained += this.paint.paintCircle(lerp(x0, x1, t), lerp(y0, y1, t), radius, p.code, dt / steps, powerScale);
+      }
+      return gained;
+    }
     resolveCollisions(dt) {
       const arr = Array.from(this.players.values()).filter(p => p.alive);
       for (let i = 0; i < arr.length; i++) {
@@ -1419,13 +1574,13 @@
           if (d >= min) continue;
           const nx = dx / d, ny = dy / d;
           const overlap = min - d;
-          a.x -= nx * overlap * 0.5; a.y -= ny * overlap * 0.5;
-          b.x += nx * overlap * 0.5; b.y += ny * overlap * 0.5;
+          a.x -= nx * overlap * CONFIG.COLLISION_PUSH; a.y -= ny * overlap * CONFIG.COLLISION_PUSH;
+          b.x += nx * overlap * CONFIG.COLLISION_PUSH; b.y += ny * overlap * CONFIG.COLLISION_PUSH;
           const av = a.vx * nx + a.vy * ny;
           const bv = b.vx * nx + b.vy * ny;
           const rel = av - bv;
-          a.vx -= nx * rel * 0.58; a.vy -= ny * rel * 0.58;
-          b.vx += nx * rel * 0.58; b.vy += ny * rel * 0.58;
+          a.vx -= nx * rel * CONFIG.COLLISION_BOUNCE; a.vy -= ny * rel * CONFIG.COLLISION_BOUNCE;
+          b.vx += nx * rel * CONFIG.COLLISION_BOUNCE; b.vy += ny * rel * CONFIG.COLLISION_BOUNCE;
           const aBoost = a.input?.boost && a.boost < 0.95;
           const bBoost = b.input?.boost && b.boost < 0.95;
           const impact = Math.abs(rel);
@@ -1459,11 +1614,23 @@
       this.roundOver = true;
       this.roundOverTimer = 8.5;
       if (this.winner) {
-        this.toast(`${this.winner.name} wins the round!`, 5000);
-        this.floatText(this.winner.x, this.winner.y - 80, 'WINNER!', this.winner.color, 2.1);
+        this.showRoundBanner(this.winner);
+        this.juice.roundEnd();
         this.burst(this.winner.x, this.winner.y, this.winner.color, 80, 2);
       }
       this.sendFullSnapshot();
+    }
+    showRoundBanner(winner) {
+      if (!winner) return;
+      const player = Array.from(this.players.values()).find(p => p.code === winner.code || p.name === winner.name);
+      const name = winner.name || player?.name || 'Winner';
+      this.centerBanner = {
+        title: `${name} wins!`,
+        subtitle: 'Next round soon',
+        color: player?.color || '#ffd166',
+        life: 5.4,
+        maxLife: 5.4
+      };
     }
     closestEnemy(p) {
       let best = null, bestD = Infinity;
@@ -1577,7 +1744,41 @@
         ctx.fillRect(0, 0, w, h);
       }
       if (this.mode === 'menu') this.drawMenuBackground(ctx, w, h);
+      this.drawCenterBanner(ctx, w, h, dpr);
       this.drawMinimap();
+    }
+    drawCenterBanner(ctx, w, h, dpr) {
+      const b = this.centerBanner;
+      if (!b || this.mode === 'menu') return;
+      const lifeRatio = clamp(b.life / b.maxLife, 0, 1);
+      const intro = clamp((b.maxLife - b.life) / 0.35, 0, 1);
+      const alpha = Math.min(1, intro, lifeRatio * 1.7);
+      const cx = w / 2;
+      const cy = h * 0.47;
+      const scale = Math.min(dpr, (w * 0.88) / 620) * (0.92 + intro * 0.08);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(7,10,22,0.72)';
+      ctx.strokeStyle = rgba(b.color, 0.55);
+      ctx.lineWidth = 2 * dpr;
+      roundRect(ctx, cx - 310 * scale, cy - 92 * scale, 620 * scale, 184 * scale, 28 * scale);
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowColor = rgba(b.color, 0.8);
+      ctx.shadowBlur = 28 * dpr;
+      ctx.font = `900 ${Math.round(62 * scale)}px ui-rounded, system-ui, sans-serif`;
+      ctx.lineWidth = 8 * dpr;
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillStyle = '#fff';
+      ctx.strokeText(b.title, cx, cy - 22 * scale);
+      ctx.fillText(b.title, cx, cy - 22 * scale);
+      ctx.shadowBlur = 0;
+      ctx.font = `800 ${Math.round(22 * scale)}px ui-rounded, system-ui, sans-serif`;
+      ctx.fillStyle = lighten(b.color, 0.45);
+      ctx.fillText(b.subtitle, cx, cy + 48 * scale);
+      ctx.restore();
     }
     drawWorld(ctx) {
       ctx.save();
