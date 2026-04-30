@@ -33,9 +33,9 @@
     BOOST_REGEN: 0.18,
     BOOST_PAINT_REWARD: 0.018,
 
-    PAINT_POWER: 255,
-    CONVERT_POWER: 135,
-    TRAIL_DEPOSIT_STEP: 11,
+    PAINT_POWER: 380,
+    CONVERT_POWER: 205,
+    TRAIL_DEPOSIT_STEP: 6,
     COLLISION_PUSH: 0.22,
     COLLISION_BOUNCE: 0.18,
     REINFORCE_POWER: 260,
@@ -150,29 +150,39 @@
       this.flash = 0;
     }
     unlock() {
-      if (!this.enabled || this.ctx) return;
+      if (!this.enabled) return false;
       try {
-        const AudioContext = window.AudioContext || window.webkitAudioContext;
-        if (AudioContext) {
+        if (!this.ctx) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          if (!AudioContext) return false;
           this.ctx = new AudioContext();
           const master = this.ctx.createGain();
-          master.gain.value = 0.72;
+          master.gain.value = 0.9;
           master.connect(this.ctx.destination);
           this.musicGain = this.ctx.createGain();
-          this.musicGain.gain.value = 0.18;
+          this.musicGain.gain.value = 0.26;
           this.musicGain.connect(master);
           this.sfxGain = this.ctx.createGain();
-          this.sfxGain.gain.value = 0.9;
+          this.sfxGain.gain.value = 1.05;
           this.sfxGain.connect(master);
           this.nextMusicAt = this.ctx.currentTime + 0.08;
         }
-      } catch (_) {}
+        if (this.ctx.state === 'suspended') this.ctx.resume?.().catch(() => {});
+        this.nextMusicAt = Math.max(this.nextMusicAt || 0, this.ctx.currentTime + 0.06);
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
     toggle() {
       this.enabled = !this.enabled;
       localStorage.setItem('paintRush.sound', this.enabled ? 'on' : 'off');
-      if (this.enabled) this.unlock();
-      else this.stopBoost();
+      if (this.enabled) {
+        this.unlock();
+        this.beep(660, 0.08, 'triangle', 0.05);
+      } else {
+        this.stopBoost();
+      }
       return this.enabled;
     }
     tone(freq = 420, dur = 0.08, type = 'sine', vol = 0.035, dest = this.sfxGain, at = null) {
@@ -180,6 +190,7 @@
       this.unlock();
       const ctx = this.ctx;
       if (!ctx) return;
+      if (ctx.state === 'suspended') return;
       const t = at ?? ctx.currentTime;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -199,7 +210,7 @@
       const t = this.ctx.currentTime;
       if (t - this.lastPaintSound < 0.085) return;
       this.lastPaintSound = t;
-      this.tone(520 + Math.min(18, amount) * 12, 0.038, 'triangle', 0.012);
+      this.tone(520 + Math.min(18, amount) * 12, 0.045, 'triangle', 0.02);
     }
     boost(on) {
       if (!this.enabled) return;
@@ -215,7 +226,7 @@
         this.boostOsc.connect(this.boostGain).connect(this.sfxGain);
         this.boostOsc.start();
       }
-      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.018 : 0.0001, ctx.currentTime, 0.045);
+      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.03 : 0.0001, ctx.currentTime, 0.045);
       if (!on && this.boostOsc) {
         const osc = this.boostOsc;
         const gain = this.boostGain;
@@ -238,8 +249,8 @@
       }, 120);
     }
     pop() {
-      this.tone(130, 0.13, 'triangle', 0.06);
-      this.tone(430, 0.09, 'sine', 0.034);
+      this.tone(130, 0.13, 'triangle', 0.075);
+      this.tone(430, 0.09, 'sine', 0.046);
       this.shake = Math.max(this.shake, 14);
       this.flash = 0.18;
     }
@@ -262,8 +273,8 @@
         const step = this.musicStep++;
         const note = notes[step % notes.length] + (step % 16 >= 8 ? 12 : 0);
         const freq = 220 * Math.pow(2, note / 12);
-        this.tone(freq, 0.18, 'triangle', 0.012, this.musicGain, this.nextMusicAt);
-        if (step % 4 === 0) this.tone(freq / 2, 0.36, 'sine', 0.018, this.musicGain, this.nextMusicAt);
+        this.tone(freq, 0.18, 'triangle', 0.026, this.musicGain, this.nextMusicAt);
+        if (step % 4 === 0) this.tone(freq / 2, 0.36, 'sine', 0.032, this.musicGain, this.nextMusicAt);
         this.nextMusicAt += 0.32;
       }
     }
@@ -1203,9 +1214,14 @@
     showRoomBadge(code) {
       const el = $('roomBadge');
       el.classList.remove('hidden');
+      el.parentElement?.classList.add('room-visible');
       el.querySelector('span').textContent = code;
     }
-    hideRoomBadge() { $('roomBadge').classList.add('hidden'); }
+    hideRoomBadge() {
+      const el = $('roomBadge');
+      el.classList.add('hidden');
+      el.parentElement?.classList.remove('room-visible');
+    }
     showModal(title, text, details, cancelLabel = 'Cancel') {
       $('modal').classList.remove('hidden');
       $('modalCancel').textContent = cancelLabel;
@@ -1229,6 +1245,8 @@
       if (this.mode === 'host') text = `Host · ${this.mesh?.countOpen() || 0} friend${(this.mesh?.countOpen() || 0) === 1 ? '' : 's'}`;
       if (this.mode === 'client') text = this.mesh?.countOpen() ? 'Connected · WebRTC' : 'Waiting for host';
       $('netStatus').textContent = text;
+      if (this.roomCode && this.mode !== 'menu' && this.mode !== 'local') this.showRoomBadge(this.roomCode);
+      else if (!this.roomCode || this.mode === 'local') this.hideRoomBadge();
     }
 
     resetGame() {
@@ -1258,6 +1276,8 @@
         p.boost = 0.75;
         this.paint.paintCircle(p.x, p.y, 88, p.code, 1, 2.6);
       }
+      this.juice.beep(523, 0.07, 'triangle', 0.04);
+      this.juice.beep(784, 0.08, 'triangle', 0.035);
       this.toast('Round start! Claim everything.', 1800);
     }
     createHuman(id, name, color) {
@@ -1555,10 +1575,11 @@
     depositPaintTrail(p, x0, y0, x1, y1, radius, dt, powerScale) {
       const d = Math.hypot(x1 - x0, y1 - y0);
       const steps = clamp(Math.ceil(d / CONFIG.TRAIL_DEPOSIT_STEP), 1, 14);
+      const stampDt = Math.max(dt / Math.min(steps, 3), 1 / 75);
       let gained = 0;
       for (let i = 1; i <= steps; i++) {
         const t = i / steps;
-        gained += this.paint.paintCircle(lerp(x0, x1, t), lerp(y0, y1, t), radius, p.code, dt / steps, powerScale);
+        gained += this.paint.paintCircle(lerp(x0, x1, t), lerp(y0, y1, t), radius, p.code, stampDt, powerScale);
       }
       return gained;
     }
