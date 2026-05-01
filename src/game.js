@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.16-fresh-join-offer',
+    VERSION: '0.2.17-renegotiate-stuck-join',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -1009,6 +1009,9 @@
         if (msg.from) this.emit('peer-left', { id: msg.from });
       } else if (kind === 'reject') {
         this.emit('status', { title: 'Connection rejected', text: 'The host rejected the connection.', details: String(payload.reason || '') });
+      } else if (kind === 'renegotiate') {
+        const id = payload.peerId || msg.from;
+        if (id && id !== this.id) this.emit('peer', { id, name: payload.displayName || payload.name || 'Friend', force: true });
       } else if (kind === 'offer' || kind === 'answer' || kind === 'ice') {
         this.emit('signal', { from: msg.from, type: kind, data: payload });
       }
@@ -1084,7 +1087,7 @@
       if (this.peers.has(peer.id)) {
         const existing = this.peers.get(peer.id);
         const t = now();
-        if (existing?.open || !this.isHost) return;
+        if (!this.isHost) return;
         const age = t - (existing?.createdAt || 0);
         if (age < 2600) {
           if (existing?.pc?.localDescription?.type === 'offer' && t - (existing.lastOfferAt || 0) > 900) {
@@ -1093,6 +1096,7 @@
           }
           return;
         }
+        if (existing?.open && !peer.force) return;
         this.removePeer(peer.id, true);
       }
       if (this.isHost) this.createPeer(peer.id, true);
@@ -1211,6 +1215,16 @@
       for (const id of this.peers.keys()) if (this.send(id, msg, channel)) sent++;
       return sent;
     }
+    resetUnopenedPeers() {
+      for (const [id, peer] of Array.from(this.peers.entries())) {
+        if (peer.open) continue;
+        try { peer.dc?.close(); } catch (_) {}
+        try { peer.stateDc?.close(); } catch (_) {}
+        try { peer.pc?.close(); } catch (_) {}
+        if (peer.disconnectTimer) clearTimeout(peer.disconnectTimer);
+        this.peers.delete(id);
+      }
+    }
     removePeer(id, close = true) {
       const peer = this.peers.get(id);
       if (!peer) return;
@@ -1274,6 +1288,7 @@
       this.accumFullGrid = 0;
       this.lastHostJoinNudgeAt = 0;
       this.lastHostJoinRefreshAt = 0;
+      this.lastHostRenegotiateAt = 0;
       this.joinWaitStartedAt = 0;
       this.fps = 60;
       this.frameCounter = 0;
@@ -1514,6 +1529,7 @@
       this.roomCode = code;
       this.lastHostJoinNudgeAt = 0;
       this.lastHostJoinRefreshAt = 0;
+      this.lastHostRenegotiateAt = 0;
       this.joinWaitStartedAt = now();
       this.players.clear();
       this.bots.clear();
@@ -1620,6 +1636,13 @@
             }
           })
           .catch(() => {});
+      }
+      const stuckFor = t - (this.joinWaitStartedAt || t);
+      if (stuckFor > 4200 && t - this.lastHostRenegotiateAt > 4200) {
+        this.lastHostRenegotiateAt = t;
+        this.mesh?.resetUnopenedPeers();
+        this.signal.sendSignal(this.signal.hostPeerId, 'renegotiate', payload);
+        this.signal.sendSignal('*', 'renegotiate', payload);
       }
     }
     scheduleClientReconnect() {
