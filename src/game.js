@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.6.3-regression-recovery',
+    VERSION: '0.6.4-scroll-webrtc-bots',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_GAME_VERSION: 'roads-splash-io-v1',
@@ -35,8 +35,8 @@
     MUSIC_DUCK_SPLAT: 0.42,
     MUSIC_DUCK_ROUND: 0.56,
 
-    BASE_RADIUS: 19,
-    MAX_RADIUS_BONUS: 14,
+    BASE_RADIUS: 20,
+    MAX_RADIUS_BONUS: 20,
     BASE_SPEED: 218,
     MAX_AREA_SPEED_BONUS: 72,
     ACCEL: 1300,
@@ -52,7 +52,7 @@
     PAINT_POWER: 470,
     CONVERT_POWER: 260,
     OVERPAINT_CENTER: 0.52,
-    TRAIL_DEPOSIT_STEP: 6,
+    TRAIL_DEPOSIT_STEP: 11,
     COLLISION_PUSH: 0,
     COLLISION_BOUNCE: 0,
     REINFORCE_POWER: 260,
@@ -1447,6 +1447,7 @@
       this.signal = signal;
       this.isHost = isHost;
       this.peers = new Map();
+      this.offerFailures = new Map();
       this.signal.on('peer', (peer) => this.onPeer(peer));
       this.signal.on('signal', (msg) => this.onSignal(msg));
       this.signal.on('peer-left', ({ id }) => this.removePeer(id));
@@ -1480,7 +1481,7 @@
     }
     createPeer(id, makeOffer) {
       const pc = new RTCPeerConnection({ iceServers: CONFIG.ICE_SERVERS });
-      const state = { id, pc, dc: null, stateDc: null, open: false, openEmitted: false, lastInputAt: 0, pendingIce: [], disconnectTimer: null, createdAt: now() };
+      const state = { id, pc, dc: null, stateDc: null, open: false, openEmitted: false, lastInputAt: 0, pendingIce: [], disconnectTimer: null, createdAt: now(), makingOffer: false, lastOfferAt: 0 };
       this.peers.set(id, state);
       pc.onicecandidate = (ev) => { if (ev.candidate) this.signal.sendSignal(id, 'ice', ev.candidate); };
       pc.onconnectionstatechange = () => {
@@ -1496,20 +1497,58 @@
         }
       };
       pc.ondatachannel = (ev) => this.attachDataChannel(state, ev.channel);
-      if (makeOffer) {
-        const dc = pc.createDataChannel('roads-control');
-        this.attachDataChannel(state, dc);
-        const stateDc = pc.createDataChannel('roads-state', { ordered: false, maxRetransmits: 0 });
-        this.attachDataChannel(state, stateDc);
-        pc.createOffer()
-          .then(offer => pc.setLocalDescription(offer))
-          .then(() => {
-            state.lastOfferAt = now();
-            return this.signal.sendSignal(id, 'offer', pc.localDescription);
-          })
-          .catch(err => this.game.toast(`Offer failed: ${err.message || err}`));
-      }
+      if (makeOffer) this.makeOffer(state, 'initial');
       return state;
+    }
+    ensureOfferChannels(peer) {
+      if (!peer.dc || peer.dc.readyState === 'closed') {
+        const dc = peer.pc.createDataChannel('roads-control');
+        this.attachDataChannel(peer, dc);
+      }
+      if (!peer.stateDc || peer.stateDc.readyState === 'closed') {
+        const stateDc = peer.pc.createDataChannel('roads-state', { ordered: false, maxRetransmits: 0 });
+        this.attachDataChannel(peer, stateDc);
+      }
+    }
+    makeOffer(peer, reason = 'offer') {
+      if (!this.isHost || !peer || peer.open || peer.makingOffer) return;
+      const pc = peer.pc;
+      if (!pc || pc.signalingState === 'closed') return;
+      peer.makingOffer = true;
+      try {
+        this.ensureOfferChannels(peer);
+      } catch (err) {
+        peer.makingOffer = false;
+        this.handleOfferFailure(peer, err, reason);
+        return;
+      }
+      pc.createOffer()
+        .then(offer => {
+          if (pc.signalingState === 'closed') return false;
+          return pc.setLocalDescription(offer).then(() => true);
+        })
+        .then((ready) => {
+          if (!ready || pc.signalingState === 'closed' || !pc.localDescription) return;
+          peer.lastOfferAt = now();
+          return this.signal.sendSignal(peer.id, 'offer', pc.localDescription);
+        })
+        .catch(err => this.handleOfferFailure(peer, err, reason))
+        .finally(() => { peer.makingOffer = false; });
+    }
+    handleOfferFailure(peer, err, reason = 'offer') {
+      const id = peer?.id;
+      if (!id) return;
+      const failures = (this.offerFailures.get(id) || 0) + 1;
+      this.offerFailures.set(id, failures);
+      console.warn(`WebRTC ${reason} failed for ${id}; retry ${failures}`, err);
+      if (failures <= 2) this.game.toast('Retrying host WebRTC offer...', 2600);
+      if (this.peers.get(id) === peer) this.removePeer(id, true);
+      const delay = Math.min(2600, 450 + failures * 350);
+      setTimeout(() => {
+        if (!this.isHost) return;
+        const existing = this.peers.get(id);
+        if (!existing?.open) this.createPeer(id, true);
+      }, delay);
     }
     maintainHostNegotiations() {
       if (!this.isHost) return;
@@ -1517,6 +1556,10 @@
       for (const [id, peer] of Array.from(this.peers.entries())) {
         if (!peer || peer.open) continue;
         const age = t - (peer.createdAt || t);
+        if (!peer.pc?.localDescription && age > 650) {
+          this.makeOffer(peer, 'maintain');
+          continue;
+        }
         if (peer.pc?.localDescription?.type === 'offer' && t - (peer.lastOfferAt || 0) > 1200) {
           peer.lastOfferAt = t;
           this.signal.sendSignal(id, 'offer', peer.pc.localDescription);
@@ -1538,6 +1581,7 @@
         peer.open = true;
         if (peer.openEmitted) return;
         peer.openEmitted = true;
+        this.offerFailures.delete(peer.id);
         this.emit('open', peer.id);
         if (!this.isHost) {
           this.game.sendClientHello(true);
@@ -1742,6 +1786,7 @@
       this.lastLobbyAt = 0;
 
       this.setupUi();
+      this.setMenuOpen(true);
       this.setupAudioGuards();
       this.resize();
       window.addEventListener('resize', () => this.resize());
@@ -1750,6 +1795,10 @@
         else this.closeClientRoomPeer();
       });
       requestAnimationFrame((t) => this.loop(t));
+    }
+    setMenuOpen(open) {
+      document.body.classList.toggle('menu-open', !!open);
+      document.body.classList.toggle('game-active', !open);
     }
     setupUi() {
       if (!$('startRoundBtn')) {
@@ -1959,6 +2008,7 @@
         $('controls').classList.add('hidden');
         $('minimap').classList.add('hidden');
         $('touchControls').classList.add('hidden');
+        this.setMenuOpen(true);
         this.showModal(
           'Signaling unavailable',
           'Could not start a hosted room. No bots were started.',
@@ -2140,6 +2190,7 @@
       $('controls').classList.add('hidden');
       $('minimap').classList.add('hidden');
       $('touchControls').classList.add('hidden');
+      this.setMenuOpen(true);
       this.hideModal();
       this.hideRoomBadge();
       this.hideRoomLobbyOverlay();
@@ -2155,6 +2206,7 @@
       this.refreshLobby(false);
     }
     showGameUi() {
+      this.setMenuOpen(false);
       $('menu').classList.add('hidden');
       $('hud').classList.remove('hidden');
       $('controls').classList.remove('hidden');
@@ -2813,9 +2865,9 @@
         return;
       }
       const cells = this.paint.getCells(p.code);
-      p.targetR = CONFIG.BASE_RADIUS + Math.min(CONFIG.MAX_RADIUS_BONUS, Math.pow(Math.max(0, cells), 0.43) * 0.25);
+      p.targetR = CONFIG.BASE_RADIUS + Math.min(CONFIG.MAX_RADIUS_BONUS, Math.sqrt(Math.max(0, cells)) * 0.29);
       p.r = lerp(p.r, p.targetR, 1 - Math.pow(0.0008, dt));
-      p.maxSpeed = CONFIG.BASE_SPEED + Math.min(CONFIG.MAX_AREA_SPEED_BONUS, cells * 0.032) - Math.max(0, p.r - CONFIG.BASE_RADIUS) * 3.6;
+      p.maxSpeed = CONFIG.BASE_SPEED + Math.min(CONFIG.MAX_AREA_SPEED_BONUS, cells * 0.055) - Math.max(0, p.r - CONFIG.BASE_RADIUS) * 2.2;
 
       let ix = p.input?.x || 0, iy = p.input?.y || 0;
       const inputMag = Math.hypot(ix, iy);
@@ -2829,9 +2881,8 @@
       const beforeY = p.y;
       const max = p.maxSpeed * boostMul;
       if (inputMag >= 0.08) {
-        const steer = 1 - Math.exp(-CONFIG.STEER_RESPONSE * dt);
-        p.vx = lerp(p.vx, ix * max, steer);
-        p.vy = lerp(p.vy, iy * max, steer);
+        p.vx += ix * CONFIG.ACCEL * dt * boostMul;
+        p.vy += iy * CONFIG.ACCEL * dt * boostMul;
       } else {
         const friction = Math.exp(-CONFIG.FRICTION * dt);
         p.vx *= friction;
@@ -2864,8 +2915,8 @@
       this.updateJello(p, dt, wantsBoost);
       this.updateMotionTrail(p, dt, wantsBoost, speed);
 
-      const paintRadius = p.r * (wantsBoost ? 1.22 : 1.08);
-      const gained = this.depositPaintTrail(p, beforeX, beforeY, p.x, p.y, paintRadius, dt, wantsBoost ? 2.05 : 1.55);
+      const paintRadius = p.r * (wantsBoost ? 1.08 : 0.93);
+      const gained = this.depositPaintTrail(p, beforeX, beforeY, p.x, p.y, paintRadius, dt, wantsBoost ? 1.32 : 1);
       if (p.id === this.myId) {
         this.juice.boost(wantsBoost);
         if (gained > 0) this.juice.paint(gained);
