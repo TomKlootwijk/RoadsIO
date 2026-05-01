@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.3.0-polish-jello',
+    VERSION: '0.4.0-audio-polish',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_GAME_VERSION: 'roads-splash-io-v1',
@@ -173,14 +173,20 @@
     constructor() {
       this.enabled = localStorage.getItem('paintRush.sound') !== 'off';
       this.ctx = null;
+      this.masterGain = null;
+      this.compressor = null;
       this.musicGain = null;
       this.sfxGain = null;
+      this.noiseBuffer = null;
       this.nextMusicAt = 0;
       this.musicStep = 0;
       this.lastPaintSound = 0;
       this.lastConvertSound = 0;
       this.boostOsc = null;
       this.boostGain = null;
+      this.boostNoise = null;
+      this.boostNoiseGain = null;
+      this.boostFilter = null;
       this.shake = 0;
       this.boostShake = 0;
       this.flash = 0;
@@ -192,61 +198,129 @@
           const AudioContext = window.AudioContext || window.webkitAudioContext;
           if (!AudioContext) return false;
           this.ctx = new AudioContext();
-          const master = this.ctx.createGain();
-          master.gain.value = 1;
-          master.connect(this.ctx.destination);
+
+          this.masterGain = this.ctx.createGain();
+          this.masterGain.gain.value = 0.86;
+          this.compressor = this.ctx.createDynamicsCompressor();
+          this.compressor.threshold.value = -17;
+          this.compressor.knee.value = 16;
+          this.compressor.ratio.value = 4;
+          this.compressor.attack.value = 0.006;
+          this.compressor.release.value = 0.18;
+          this.masterGain.connect(this.compressor).connect(this.ctx.destination);
+
           this.musicGain = this.ctx.createGain();
-          this.musicGain.gain.value = 0.5;
-          this.musicGain.connect(master);
+          this.musicGain.gain.value = 0.18;
+          this.musicGain.connect(this.masterGain);
           this.sfxGain = this.ctx.createGain();
           this.sfxGain.gain.value = 0.95;
-          this.sfxGain.connect(master);
-          this.nextMusicAt = this.ctx.currentTime + 0.08;
+          this.sfxGain.connect(this.masterGain);
+
+          this.createNoiseBuffer();
+          this.nextMusicAt = this.ctx.currentTime + 0.16;
         }
         if (this.ctx.state === 'suspended') this.ctx.resume?.().catch(() => {});
-        this.nextMusicAt = Math.max(this.nextMusicAt || 0, this.ctx.currentTime + 0.06);
+        if (!this.nextMusicAt || this.nextMusicAt < this.ctx.currentTime - 1) this.nextMusicAt = this.ctx.currentTime + 0.05;
         return true;
       } catch (_) {
         return false;
       }
+    }
+    createNoiseBuffer() {
+      if (!this.ctx || this.noiseBuffer) return;
+      const length = this.ctx.sampleRate;
+      const buffer = this.ctx.createBuffer(1, length, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      let last = 0;
+      for (let i = 0; i < length; i++) {
+        // Slightly softened noise; it reads as paint/splash instead of harsh static.
+        last = last * 0.78 + (Math.random() * 2 - 1) * 0.22;
+        data[i] = last;
+      }
+      this.noiseBuffer = buffer;
     }
     toggle() {
       this.enabled = !this.enabled;
       localStorage.setItem('paintRush.sound', this.enabled ? 'on' : 'off');
       if (this.enabled) {
         this.unlock();
-        setTimeout(() => this.beep(660, 0.1, 'triangle', 0.08), 60);
+        setTimeout(() => this.join(), 60);
       } else {
         this.stopBoost();
       }
       return this.enabled;
     }
-    tone(freq = 420, dur = 0.08, type = 'sine', vol = 0.035, dest = this.sfxGain, at = null) {
+    tone(freq = 420, dur = 0.08, type = 'sine', vol = 0.035, dest = this.sfxGain, at = null, opts = {}) {
       if (!this.enabled) return;
       this.unlock();
       const ctx = this.ctx;
-      if (!ctx) return;
-      if (ctx.state === 'suspended') return;
+      if (!ctx || ctx.state === 'suspended') return;
       const t = at ?? ctx.currentTime;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
+      const attack = opts.attack ?? 0.012;
+      const releaseAt = Math.max(t + attack + 0.01, t + dur);
       osc.type = type;
-      osc.frequency.setValueAtTime(freq, t);
-      osc.frequency.exponentialRampToValueAtTime(Math.max(50, freq * 0.86), t + dur);
+      osc.frequency.setValueAtTime(Math.max(20, freq), t);
+      if (opts.detune) osc.detune.setValueAtTime(opts.detune, t);
+      if (opts.slide) osc.frequency.exponentialRampToValueAtTime(Math.max(24, freq * opts.slide), releaseAt);
+      else osc.frequency.exponentialRampToValueAtTime(Math.max(24, freq * 0.985), releaseAt);
+      let out = osc;
+      if (opts.filter) {
+        const filter = ctx.createBiquadFilter();
+        filter.type = opts.filter.type || 'lowpass';
+        filter.frequency.setValueAtTime(opts.filter.freq || 1200, t);
+        filter.Q.value = opts.filter.q || 0.7;
+        if (opts.filter.to) filter.frequency.exponentialRampToValueAtTime(Math.max(30, opts.filter.to), releaseAt);
+        out.connect(filter);
+        out = filter;
+      }
       gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(vol, t + 0.018);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      osc.connect(gain).connect(dest || ctx.destination);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol), t + attack);
+      if (opts.sustain !== undefined) {
+        gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol * opts.sustain), t + dur * 0.55);
+      }
+      gain.gain.exponentialRampToValueAtTime(0.0001, releaseAt);
+      out.connect(gain).connect(dest || this.sfxGain || ctx.destination);
       osc.start(t);
-      osc.stop(t + dur + 0.02);
+      osc.stop(releaseAt + 0.04);
+    }
+    noiseBurst(dur = 0.1, vol = 0.035, freq = 1600, type = 'bandpass', dest = this.sfxGain, at = null, opts = {}) {
+      if (!this.enabled) return;
+      this.unlock();
+      const ctx = this.ctx;
+      if (!ctx || ctx.state === 'suspended' || !this.noiseBuffer) return;
+      const t = at ?? ctx.currentTime;
+      const source = ctx.createBufferSource();
+      const filter = ctx.createBiquadFilter();
+      const gain = ctx.createGain();
+      source.buffer = this.noiseBuffer;
+      source.loop = true;
+      filter.type = type;
+      filter.frequency.setValueAtTime(freq, t);
+      filter.Q.value = opts.q || 0.9;
+      if (opts.to) filter.frequency.exponentialRampToValueAtTime(Math.max(30, opts.to), t + dur);
+      const attack = opts.attack ?? 0.008;
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol), t + attack);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      source.connect(filter).connect(gain).connect(dest || this.sfxGain || ctx.destination);
+      source.start(t);
+      source.stop(t + dur + 0.035);
     }
     beep(freq = 420, dur = 0.055, type = 'sine', vol = 0.035) { this.tone(freq, dur, type, vol); }
     paint(amount = 1) {
       if (!this.enabled || !this.ctx) return;
       const t = this.ctx.currentTime;
-      if (t - this.lastPaintSound < 0.085) return;
+      if (t - this.lastPaintSound < 0.075) return;
       this.lastPaintSound = t;
-      this.tone(520 + Math.min(18, amount) * 12, 0.05, 'triangle', 0.032);
+      const m = Math.min(1, amount / 18);
+      this.tone(430 + m * 220 + Math.random() * 35, 0.055, 'triangle', 0.018 + m * 0.012, this.sfxGain, t, {
+        attack: 0.006,
+        slide: 0.86,
+        filter: { type: 'lowpass', freq: 2200, to: 900, q: 0.8 }
+      });
+      this.noiseBurst(0.05 + m * 0.03, 0.012 + m * 0.008, 1900 + m * 900, 'bandpass', this.sfxGain, t, { q: 1.4, to: 950 });
     }
     boost(on) {
       this.boostShake = on ? CONFIG.BOOST_SHAKE : 0;
@@ -258,69 +332,112 @@
         this.boostOsc = ctx.createOscillator();
         this.boostGain = ctx.createGain();
         this.boostOsc.type = 'triangle';
-        this.boostOsc.frequency.value = 72;
+        this.boostOsc.frequency.value = 92;
         this.boostGain.gain.value = 0.0001;
         this.boostOsc.connect(this.boostGain).connect(this.sfxGain);
         this.boostOsc.start();
-        this.tone(180, 0.08, 'triangle', 0.035);
+        if (this.noiseBuffer) {
+          this.boostNoise = ctx.createBufferSource();
+          this.boostNoise.buffer = this.noiseBuffer;
+          this.boostNoise.loop = true;
+          this.boostFilter = ctx.createBiquadFilter();
+          this.boostFilter.type = 'bandpass';
+          this.boostFilter.frequency.value = 780;
+          this.boostFilter.Q.value = 0.55;
+          this.boostNoiseGain = ctx.createGain();
+          this.boostNoiseGain.gain.value = 0.0001;
+          this.boostNoise.connect(this.boostFilter).connect(this.boostNoiseGain).connect(this.sfxGain);
+          this.boostNoise.start();
+        }
+        this.tone(210, 0.08, 'triangle', 0.032, this.sfxGain, ctx.currentTime, { slide: 1.45, attack: 0.005 });
       }
-      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.018 : 0.0001, ctx.currentTime, 0.055);
-      if (!on && this.boostOsc) {
-        const osc = this.boostOsc;
-        const gain = this.boostGain;
-        this.boostOsc = null;
-        this.boostGain = null;
-        setTimeout(() => {
-          try { osc.stop(); osc.disconnect(); gain.disconnect(); } catch (_) {}
-        }, 180);
-      }
+      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.012 : 0.0001, ctx.currentTime, 0.055);
+      if (this.boostNoiseGain) this.boostNoiseGain.gain.setTargetAtTime(on ? 0.011 : 0.0001, ctx.currentTime, 0.055);
+      if (!on && this.boostOsc) this.stopBoost(180);
     }
-    stopBoost() {
+    stopBoost(delayMs = 120) {
       this.boostShake = 0;
-      if (!this.boostOsc) return;
+      const ctx = this.ctx;
       const osc = this.boostOsc;
       const gain = this.boostGain;
-      this.boostOsc = null;
-      this.boostGain = null;
-      try { gain.gain.setTargetAtTime(0.0001, this.ctx?.currentTime || 0, 0.03); } catch (_) {}
+      const noise = this.boostNoise;
+      const noiseGain = this.boostNoiseGain;
+      const filter = this.boostFilter;
+      this.boostOsc = this.boostGain = this.boostNoise = this.boostNoiseGain = this.boostFilter = null;
+      try { gain?.gain?.setTargetAtTime(0.0001, ctx?.currentTime || 0, 0.03); } catch (_) {}
+      try { noiseGain?.gain?.setTargetAtTime(0.0001, ctx?.currentTime || 0, 0.03); } catch (_) {}
       setTimeout(() => {
-        try { osc.stop(); osc.disconnect(); gain.disconnect(); } catch (_) {}
-      }, 120);
+        try { osc?.stop(); osc?.disconnect(); gain?.disconnect(); } catch (_) {}
+        try { noise?.stop(); noise?.disconnect(); noiseGain?.disconnect(); filter?.disconnect(); } catch (_) {}
+      }, delayMs);
     }
-    pop() {
-      this.splat();
+    pop() { this.splat(); }
+    vibrate(pattern) {
+      try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (_) {}
     }
     hit(force = 1) {
-      this.tone(160 + force * 24, 0.09, 'triangle', 0.045);
-      this.tone(320 + force * 55, 0.06, 'sine', 0.035);
-      this.shake = Math.max(this.shake, 5 + force * 3);
+      const f = clamp(force, 0.35, 1.8);
+      this.noiseBurst(0.08 + f * 0.02, 0.035 + f * 0.012, 190, 'lowpass', this.sfxGain, null, { q: 0.6, to: 70 });
+      this.tone(150 + f * 32, 0.11, 'triangle', 0.04, this.sfxGain, null, { slide: 0.65, attack: 0.004 });
+      this.tone(390 + f * 80, 0.055, 'sine', 0.025, this.sfxGain, this.ctx ? this.ctx.currentTime + 0.015 : null, { slide: 1.18 });
+      this.shake = Math.max(this.shake, 5 + f * 3);
+      this.vibrate(18);
     }
     convert(amount = 1) {
       if (!this.enabled || !this.ctx) return;
       const t = this.ctx.currentTime;
-      if (t - this.lastConvertSound < 0.13) return;
+      if (t - this.lastConvertSound < 0.12) return;
       this.lastConvertSound = t;
-      this.tone(360 + Math.min(20, amount) * 8, 0.07, 'triangle', 0.028);
+      const m = Math.min(1, amount / 24);
+      this.tone(310 + m * 190, 0.07, 'triangle', 0.026, this.sfxGain, t, { slide: 1.32, attack: 0.006 });
+      this.noiseBurst(0.065, 0.012 + m * 0.012, 1250 + m * 900, 'bandpass', this.sfxGain, t, { q: 1.1, to: 2200 });
     }
     join() {
-      this.tone(523, 0.08, 'triangle', 0.04);
-      this.tone(784, 0.1, 'sine', 0.035, this.sfxGain, this.ctx ? this.ctx.currentTime + 0.07 : null);
+      if (!this.enabled) return;
+      this.unlock();
+      const t = this.ctx ? this.ctx.currentTime : null;
+      this.tone(392, 0.11, 'triangle', 0.032, this.sfxGain, t, { slide: 1.08, attack: 0.008 });
+      this.tone(523, 0.12, 'triangle', 0.03, this.sfxGain, this.ctx ? t + 0.07 : null, { slide: 1.06, attack: 0.008 });
+      this.tone(784, 0.18, 'sine', 0.027, this.sfxGain, this.ctx ? t + 0.14 : null, { slide: 1.02, attack: 0.012 });
     }
     splat(strength = 1, own = false) {
-      this.tone(105, 0.16, 'triangle', 0.105);
-      this.tone(260, 0.11, 'sawtooth', 0.055);
-      this.tone(620, 0.08, 'sine', 0.04, this.sfxGain, this.ctx ? this.ctx.currentTime + 0.04 : null);
-      this.shake = Math.max(this.shake, (own ? CONFIG.OWN_SPLAT_SHAKE : CONFIG.SPLAT_SHAKE) * strength);
+      const s = clamp(strength, 0.65, 1.7);
+      const t = this.ctx ? this.ctx.currentTime : null;
+      this.noiseBurst(0.18 * s, 0.085 * s, 620, 'lowpass', this.sfxGain, t, { q: 0.5, to: 150 });
+      this.noiseBurst(0.13 * s, 0.045 * s, 2400, 'bandpass', this.sfxGain, t, { q: 1.2, to: 900 });
+      this.tone(82, 0.19, 'triangle', 0.085 * s, this.sfxGain, t, { slide: 0.48, attack: 0.004 });
+      this.tone(245, 0.11, 'sawtooth', 0.036 * s, this.sfxGain, this.ctx ? t + 0.025 : null, {
+        slide: 0.72,
+        attack: 0.004,
+        filter: { type: 'lowpass', freq: 1200, to: 420, q: 0.8 }
+      });
+      this.tone(690, 0.08, 'sine', 0.032, this.sfxGain, this.ctx ? t + 0.045 : null, { slide: 1.2 });
+      this.shake = Math.max(this.shake, (own ? CONFIG.OWN_SPLAT_SHAKE : CONFIG.SPLAT_SHAKE) * s);
       this.flash = Math.max(this.flash, own ? 0.3 : 0.22);
+      this.vibrate(own ? [30, 20, 45] : 28);
     }
     roundEnd() {
       if (!this.enabled) return;
       this.unlock();
       if (!this.ctx) return;
       const t = this.ctx.currentTime;
-      [392, 494, 587, 784].forEach((f, i) => this.tone(f, 0.22, 'triangle', 0.04, this.sfxGain, t + i * 0.12));
-      this.tone(196, 0.55, 'sine', 0.05, this.sfxGain, t);
+      const notes = [392, 494, 587, 740, 784];
+      notes.forEach((f, i) => this.tone(f, 0.24, i === notes.length - 1 ? 'sine' : 'triangle', 0.034, this.sfxGain, t + i * 0.095, { slide: i === notes.length - 1 ? 1.01 : 1.08, attack: 0.01 }));
+      this.tone(196, 0.72, 'sine', 0.045, this.sfxGain, t, { sustain: 0.35, attack: 0.02 });
+      this.noiseBurst(0.18, 0.025, 3600, 'highpass', this.sfxGain, t + 0.3, { q: 0.4 });
       this.flash = Math.max(this.flash, 0.28);
+      this.vibrate([20, 35, 20]);
+    }
+    musicChord(root, at, dur = 0.9) {
+      const intervals = [0, 3, 7, 10];
+      intervals.forEach((semi, i) => {
+        const f = root * Math.pow(2, semi / 12);
+        this.tone(f, dur, i === 0 ? 'sine' : 'triangle', 0.012 / (i ? 1 : 0.8), this.musicGain, at + i * 0.006, {
+          attack: 0.045,
+          sustain: 0.36,
+          filter: { type: 'lowpass', freq: 1450, to: 650, q: 0.5 }
+        });
+      });
     }
     tick(dt) {
       this.shake = Math.max(0, this.shake - dt * 42);
@@ -328,14 +445,30 @@
       this.flash = Math.max(0, this.flash - dt);
       if (!this.enabled || !this.ctx || !this.musicGain) return;
       if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
-      const notes = [0, 3, 5, 7, 10, 7, 5, 3];
-      while (this.nextMusicAt < this.ctx.currentTime + 0.22) {
+      const ctx = this.ctx;
+      const roots = [196, 174.61, 220, 164.81]; // G, F, A, E: simple moody arcade loop.
+      const leadScale = [0, 3, 5, 7, 10, 12, 15, 17];
+      const stepDur = 0.24;
+      while (this.nextMusicAt < ctx.currentTime + 0.38) {
         const step = this.musicStep++;
-        const note = notes[step % notes.length] + (step % 16 >= 8 ? 12 : 0);
-        const freq = 220 * Math.pow(2, note / 12);
-        this.tone(freq, 0.2, 'triangle', 0.07, this.musicGain, this.nextMusicAt);
-        if (step % 4 === 0) this.tone(freq / 2, 0.42, 'sine', 0.08, this.musicGain, this.nextMusicAt);
-        this.nextMusicAt += 0.32;
+        const beat = step % 16;
+        const bar = Math.floor(step / 16) % roots.length;
+        const t = this.nextMusicAt;
+        const root = roots[bar];
+
+        if (beat === 0 || beat === 8) this.musicChord(root, t, beat === 0 ? 1.05 : 0.7);
+        if (beat % 4 === 0) {
+          this.tone(root / 2, 0.22, 'triangle', 0.038, this.musicGain, t, { slide: 0.86, attack: 0.006, filter: { type: 'lowpass', freq: 480, to: 220, q: 0.5 } });
+          this.noiseBurst(0.052, 0.024, 95, 'lowpass', this.musicGain, t, { q: 0.6, to: 55, attack: 0.002 });
+        }
+        if (beat === 6 || beat === 14) this.noiseBurst(0.048, 0.011, 3200, 'highpass', this.musicGain, t, { q: 0.3 });
+        if (beat % 2 === 1) this.noiseBurst(0.028, 0.0055, 5200, 'highpass', this.musicGain, t, { q: 0.3 });
+        if (beat === 3 || beat === 7 || beat === 11 || beat === 15) {
+          const idx = (step * 3 + bar * 2) % leadScale.length;
+          const f = root * Math.pow(2, (leadScale[idx] + 12) / 12);
+          this.tone(f, 0.12, 'triangle', 0.014, this.musicGain, t, { slide: 0.92, attack: 0.006, filter: { type: 'lowpass', freq: 2500, to: 1250, q: 0.7 } });
+        }
+        this.nextMusicAt += stepDur;
       }
     }
   }
@@ -1325,6 +1458,7 @@
       this.particles = [];
       this.floaters = [];
       this.shockwaves = [];
+      this.ripples = [];
       this.camera = { x: CONFIG.WORLD_W / 2, y: CONFIG.WORLD_H / 2, zoom: 1 };
       this.view = null;
       this.quality = localStorage.getItem('paintRush.quality') || 'auto';
@@ -2331,11 +2465,15 @@
           0.9,
           droplet ? { shape: 'droplet', stretch: rand(1.35, 2.4), glow: 0.2 } : { shape: 'dot', glow: 0.08 }
         );
+        if (gained > 0 && !this.useLowFx()) this.addInkRipple(p.x, p.y, p.color, p.r * rand(0.92, wantsBoost ? 1.45 : 1.18), wantsBoost ? 0.52 : 0.38);
         p.lastPaintX = p.x; p.lastPaintY = p.y;
       }
     }
+    useLowFx() {
+      return this.quality === 'low' || (this.quality === 'auto' && this.fps < 43);
+    }
     ensureBlobMesh(p) {
-      const targetCount = this.quality === 'low' ? 8 : this.quality === 'medium' ? 10 : 12;
+      const targetCount = this.useLowFx() ? 8 : this.quality === 'medium' ? 10 : 12;
       if (Array.isArray(p.blob) && p.blob.length === targetCount) return;
       p.blob = Array.from({ length: targetCount }, (_, i) => ({
         a: i / targetCount * TAU,
@@ -2546,8 +2684,20 @@
       }
     }
 
+    addInkRipple(x, y, color, radius = 24, life = 0.4) {
+      if (this.useLowFx()) return;
+      const cap = this.quality === 'medium' ? 42 : 72;
+      if (this.ripples.length > cap) this.ripples.splice(0, this.ripples.length - cap);
+      this.ripples.push({
+        x, y, color, radius,
+        life, maxLife: life,
+        rot: rand(0, TAU),
+        sx: rand(0.75, 1.35),
+        sy: rand(0.7, 1.25)
+      });
+    }
     addParticle(x, y, vx, vy, color, life = 0.5, size = 8, alpha = 1, options = null) {
-      if (this.quality === 'low' && this.particles.length > 120) return;
+      if (this.useLowFx() && this.particles.length > 120) return;
       this.particles.push({
         x, y, vx, vy, color, life, maxLife: life, size, alpha,
         shape: options?.shape || 'dot',
@@ -2560,10 +2710,10 @@
       });
     }
     burst(x, y, color, count = 24, force = 1) {
-      const cap = this.quality === 'low' ? Math.min(count, 22) : count;
+      const cap = this.useLowFx() ? Math.min(count, 22) : count;
       for (let i = 0; i < cap; i++) {
         const a = rand(0, TAU), s = rand(80, 370) * force;
-        const droplet = this.quality === 'low' ? Math.random() < 0.35 : Math.random() < 0.68;
+        const droplet = this.useLowFx() ? Math.random() < 0.35 : Math.random() < 0.68;
         this.addParticle(
           x, y,
           Math.cos(a) * s,
@@ -2595,6 +2745,8 @@
       this.particles = this.particles.filter(p => p.life > 0);
       for (const f of this.floaters) { f.life -= dt; f.y += f.vy * dt; }
       this.floaters = this.floaters.filter(f => f.life > 0);
+      for (const r of this.ripples) r.life -= dt;
+      this.ripples = this.ripples.filter(r => r.life > 0);
       for (const s of this.shockwaves) s.life -= dt;
       this.shockwaves = this.shockwaves.filter(s => s.life > 0);
     }
@@ -2609,8 +2761,12 @@
 
       const target = this.players.get(this.myId) || Array.from(this.players.values())[0];
       if (target) {
-        this.camera.x = lerp(this.camera.x, target.x, 1 - Math.pow(0.002, dt));
-        this.camera.y = lerp(this.camera.y, target.y, 1 - Math.pow(0.002, dt));
+        const speed = Math.hypot(target.vx || 0, target.vy || 0);
+        const lead = clamp(speed / 420, 0, 1);
+        const aimX = clamp(target.x + (target.vx || 0) * 0.16 * lead, target.r || CONFIG.BASE_RADIUS, CONFIG.WORLD_W - (target.r || CONFIG.BASE_RADIUS));
+        const aimY = clamp(target.y + (target.vy || 0) * 0.16 * lead, target.r || CONFIG.BASE_RADIUS, CONFIG.WORLD_H - (target.r || CONFIG.BASE_RADIUS));
+        this.camera.x = lerp(this.camera.x, aimX, 1 - Math.pow(0.002, dt));
+        this.camera.y = lerp(this.camera.y, aimY, 1 - Math.pow(0.002, dt));
       } else {
         this.camera.x = lerp(this.camera.x, CONFIG.WORLD_W / 2, 0.02);
         this.camera.y = lerp(this.camera.y, CONFIG.WORLD_H / 2, 0.02);
@@ -2627,6 +2783,7 @@
       ctx.setTransform(this.camera.zoom, 0, 0, this.camera.zoom, tx, ty);
 
       this.drawWorld(ctx);
+      this.drawInkRipples(ctx);
       this.drawParticles(ctx, false);
       this.drawShockwaves(ctx);
       for (const p of this.players.values()) this.drawPlayer(ctx, p);
@@ -2732,7 +2889,7 @@
       ctx.fillStyle = vignette;
       ctx.fillRect(0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H);
 
-      if (this.camera.zoom > 0.68 && this.quality !== 'low') {
+      if (this.camera.zoom > 0.68 && !this.useLowFx()) {
         ctx.beginPath();
         ctx.strokeStyle = 'rgba(255,255,255,0.035)';
         ctx.lineWidth = 1;
@@ -2827,6 +2984,14 @@
       ctx.beginPath();
       ctx.ellipse(p.r * 0.08, -p.r * 0.08, p.r * 0.16, p.r * 0.06, -0.2, 0, TAU);
       ctx.fill();
+      if (!this.useLowFx()) {
+        ctx.globalAlpha = 0.22;
+        ctx.lineWidth = Math.max(2, p.r * 0.08);
+        ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+        ctx.beginPath();
+        ctx.arc(-p.r * 0.04, -p.r * 0.06, p.r * 0.58, -2.55, -0.58);
+        ctx.stroke();
+      }
       ctx.restore();
 
       ctx.save();
@@ -2863,6 +3028,31 @@
       ctx.fill();
       ctx.fillStyle = '#fff';
       ctx.fillText(name, 0, 0);
+      ctx.restore();
+    }
+    drawInkRipples(ctx) {
+      if (!this.ripples.length || this.useLowFx()) return;
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      for (const r of this.ripples) {
+        const a = clamp(r.life / r.maxLife, 0, 1);
+        const grow = 1 + (1 - a) * 0.48;
+        ctx.globalAlpha = a * 0.22;
+        ctx.strokeStyle = rgba(r.color, 0.72);
+        ctx.lineWidth = 2.2 * a;
+        ctx.save();
+        ctx.translate(r.x, r.y);
+        ctx.rotate(r.rot);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r.radius * r.sx * grow, r.radius * r.sy * grow, 0, 0, TAU);
+        ctx.stroke();
+        ctx.globalAlpha = a * 0.09;
+        ctx.fillStyle = rgba(r.color, 0.5);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r.radius * r.sx * (0.65 + grow * 0.25), r.radius * r.sy * (0.65 + grow * 0.25), 0, 0, TAU);
+        ctx.fill();
+        ctx.restore();
+      }
       ctx.restore();
     }
     drawParticles(ctx, foreground) {

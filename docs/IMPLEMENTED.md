@@ -27,6 +27,8 @@
 - Wet-look paint field shading with sheen and stronger edge definition.
 - Paint particles with droplet streaks.
 - Richer splat bursts and layered shockwaves.
+- Visual-only wet ink ripples on medium/high quality.
+- Cleaner procedural sound design and softer generative music.
 - Floating combo/winner text.
 - Screen shake and flash on impact.
 - Mini-map.
