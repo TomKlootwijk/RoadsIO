@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.14-round-restart-paint',
+    VERSION: '0.2.15-android-join-retry',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -924,6 +924,20 @@
       this.connected = true;
       this.emit('status', { title: 'Connected', text: `Joined signaling room ${this.room}.`, details: 'Mode: HTTP long-poll mailbox' });
     }
+    async refreshHttpJoin() {
+      if (!this.connected || !this.room) return false;
+      const data = await this.fetchJson(`/rooms/${encodeURIComponent(this.room)}/join`, {
+        method: 'POST',
+        body: {
+          peerId: this.id,
+          displayName: this.name,
+          gameVersion: CONFIG.VERSION,
+          contentHash: CONFIG.SIGNALING_CONTENT_HASH
+        }
+      });
+      if (data.hostPeerId) this.hostPeerId = data.hostPeerId;
+      return true;
+    }
     async fetchJson(path, options = {}) {
       const init = {
         method: options.method || 'GET',
@@ -1261,6 +1275,7 @@
       this.accumInput = 0;
       this.accumFullGrid = 0;
       this.lastHostJoinNudgeAt = 0;
+      this.lastHostJoinRefreshAt = 0;
       this.joinWaitStartedAt = 0;
       this.fps = 60;
       this.frameCounter = 0;
@@ -1500,6 +1515,7 @@
       this.isHost = false;
       this.roomCode = code;
       this.lastHostJoinNudgeAt = 0;
+      this.lastHostJoinRefreshAt = 0;
       this.joinWaitStartedAt = now();
       this.players.clear();
       this.bots.clear();
@@ -1591,11 +1607,22 @@
       const t = now();
       if (!force && t - this.lastHostJoinNudgeAt < 1400) return;
       this.lastHostJoinNudgeAt = t;
-      this.signal.sendSignal(this.signal.hostPeerId, 'join', {
+      const payload = {
         peerId: this.myId,
         displayName: this.playerName,
         name: this.playerName
-      });
+      };
+      this.signal.sendSignal(this.signal.hostPeerId, 'join', payload);
+      if (force || t - this.lastHostJoinRefreshAt > 3200) {
+        this.lastHostJoinRefreshAt = t;
+        this.signal.refreshHttpJoin()
+          .then(() => {
+            if (this.mode === 'client' && this.mesh?.countOpen() === 0) {
+              this.signal.sendSignal('*', 'join', payload);
+            }
+          })
+          .catch(() => {});
+      }
     }
     scheduleClientReconnect() {
       if (this.isHost || this.mode !== 'client' || !this.roomCode || this.reconnectTimer || this.reconnecting) return;
