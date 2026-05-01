@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.15-android-join-retry',
+    VERSION: '0.2.16-fresh-join-offer',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
@@ -1083,18 +1083,16 @@
       if (!peer.id || peer.id === this.signal.id) return;
       if (this.peers.has(peer.id)) {
         const existing = this.peers.get(peer.id);
-        const stateNow = existing?.pc?.connectionState || '';
         const t = now();
-        if (this.isHost && !existing?.open && existing?.pc?.localDescription?.type === 'offer' && t - (existing.lastOfferAt || 0) > 1200) {
-          existing.lastOfferAt = t;
-          this.signal.sendSignal(peer.id, 'offer', existing.pc.localDescription);
+        if (existing?.open || !this.isHost) return;
+        const age = t - (existing?.createdAt || 0);
+        if (age < 2600) {
+          if (existing?.pc?.localDescription?.type === 'offer' && t - (existing.lastOfferAt || 0) > 900) {
+            existing.lastOfferAt = t;
+            this.signal.sendSignal(peer.id, 'offer', existing.pc.localDescription);
+          }
+          return;
         }
-        const staleUnopened = this.isHost && !existing?.open && t - (existing?.createdAt || 0) > 10000;
-        const stillNegotiating = !staleUnopened && ((t - (existing?.createdAt || 0) < 8000)
-          || stateNow === 'new'
-          || stateNow === 'connecting'
-          || stateNow === 'connected');
-        if (existing?.open || !this.isHost || stillNegotiating) return;
         this.removePeer(peer.id, true);
       }
       if (this.isHost) this.createPeer(peer.id, true);
