@@ -44,3 +44,57 @@ These are intentionally conservative. The round flow and host-authoritative arch
 
 ### Performance guardrails
 - Cosmetic ripples, caustic blob highlights, extra particle density, and high-detail blob meshes are disabled or reduced in Low quality and automatically throttled when Auto quality detects low FPS.
+
+## 0.5.0 ultra-juice polish pass
+
+### Scope boundary
+- This pass is intentionally cosmetic-only.
+- No movement constants, paint/scoring rules, splat thresholds, bot behavior, round timing, room flow, signaling protocol, or compatibility key were changed.
+
+### New visual juice
+- Added boost speed streaks and subtle blob afterimages.
+- Added spark bursts for combo pops, wall taps, splats, and winner celebrations.
+- Added winner confetti and a score-leader crown.
+- Added a minimap viewport outline.
+- Added stronger arena depth: background texture, wet-ink shimmer, glints, and vignette.
+- Added a richer round/winner banner treatment.
+
+### Interface polish
+- Improved menu glass, logo shine, button sweeps, HUD legibility, boost meter sheen, touch-control glass, and keyboard focus visibility.
+- Added reduced-motion CSS guardrails for users who prefer less animation.
+
+### Audio polish
+- Added round-start, wall-bump, combo-pop, and celebration layers to the existing procedural audio system.
+
+### Performance guardrails
+- New cosmetic effects are reduced or skipped by Low quality and by Auto quality when FPS falls.
+
+## 0.5.1 optimized-juice polish pass
+
+Presentation/performance pass only; gameplay mechanics remain unchanged.
+
+- Cached static canvas backdrop/vignette work to reduce full-screen per-frame gradient cost.
+- Throttled HUD leaderboard rebuilds and minimap refreshes.
+- Added off-screen FX culling and in-place FX list compaction.
+- Reduced splat screen shake while preserving impact through softer flash, particles, and shockwaves.
+- Replaced gameplay HUD backdrop blur with a cheaper glass treatment.
+
+
+## 0.6.0 ultra-optimized juice pass
+
+This pass keeps the existing rules intact while making the game feel faster, clearer, and more responsive.
+
+### New feedback loops
+- RUSH streaks reward continuous painting with an escalating HUD badge, pop text, shockwaves, spark bursts, flash, and procedural audio.
+- Lead changes now announce themselves with a short banner, toast, sparkle burst, and screen feedback.
+- The last 10 seconds now create an endgame pulse with timer styling, countdown banners, audio ticks, and urgency flashes.
+- High-speed play gains screen-space rush streaks, while nearby off-screen threats get edge arrows.
+
+### Performance improvements
+- Paint rendering now caches falloff, world-coordinate, wet/deep/gloss, grain, and sparkle data.
+- Dirty paint/network delta queues use cursor consumption rather than repeated array slicing.
+- Save-Data and reduced-motion preferences automatically trim DPR and expensive cosmetic layers.
+
+### Compatibility boundaries
+- No changes to the stable signaling compatibility key.
+- No changes to movement constants, win condition, scoring rules, or round length.
