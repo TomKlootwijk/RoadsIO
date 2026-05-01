@@ -69,3 +69,28 @@ Scope: responsiveness, feedback, and rendering efficiency. Core movement constan
 - `node --check RoadsIO/src/game.js`
 - `node --check RuneValeSignaling/server.js`
 - Node DOM/canvas smoke harness: local game starts, spawns players, runs 120 frames, updates HUD, and reports build `0.6.0-ultra-juice-optimized`.
+
+# Feedback Polish Pass
+
+Build: `0.6.2-feedback-polish`
+
+Scope: addressed recent playtest feedback while preserving the core paint/boost/splat loop.
+
+## Changes
+
+- Removed the Paint Storm tier/label and capped the streak presentation at Mega Splash.
+- Removed center-screen lead-change popups; lead changes now use a small world-space cue, a shorter toast, and lighter audio/shake.
+- Removed final countdown center banners and final-second shake; the HUD timer is the only countdown treatment.
+- Fixed the round-over restart bug by decrementing the intermission timer before the inactive-round early return, and broadcasting fresh round state/paint to clients.
+- Hid the online lobby overlay during automatic intermission restarts so it no longer blocks round-end visuals.
+- Reworked bot brains back toward calmer territory-first movement with much less direct hunting and less boost spam.
+- Replaced the old rigid screen-space rush stripes with subtle world-space player trails that follow the player path.
+- Reduced boost speed-line width/spawn rate and kept high-speed feedback out of the center of the screen.
+- Replaced the overhead crown with a smaller lead badge and retained the softer leader halo.
+- Improved splat collision fairness with contact padding, closing-speed checks, overlap separation, light bounce, and immediate client-side splat event feedback.
+- Anchored player body highlights instead of rotating the glare with movement.
+
+## Verification
+
+- `node --check RoadsIO/src/game.js`
+- Browser smoke test was attempted, but this execution environment blocks Chromium navigation to both local HTTP and file URLs (`ERR_BLOCKED_BY_ADMINISTRATOR`).

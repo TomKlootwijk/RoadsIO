@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.6.1-ultra-juice-hotfix',
+    VERSION: '0.6.2-feedback-polish',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_GAME_VERSION: 'roads-splash-io-v1',
@@ -46,20 +46,21 @@
     BOOST_DRAIN: 0.52,
     BOOST_REGEN: 0.08,
     BOOST_PAINT_REWARD: 0.00025,
-    STREAK_MAX: 180,
+    STREAK_MAX: 135,
     STREAK_TIER: 45,
     STREAK_DECAY: 16,
     LOW_TIME_SECONDS: 10,
-    LEAD_CHANGE_SHAKE: 5.5,
+    LEAD_CHANGE_SHAKE: 2.2,
 
     PAINT_POWER: 470,
     CONVERT_POWER: 260,
     OVERPAINT_CENTER: 0.52,
     TRAIL_DEPOSIT_STEP: 6,
-    COLLISION_PUSH: 0,
-    COLLISION_BOUNCE: 0,
+    COLLISION_PUSH: 0.56,
+    COLLISION_BOUNCE: 0.16,
     REINFORCE_POWER: 260,
-    SPLAT_MIN_IMPACT: 105,
+    SPLAT_CONTACT_PADDING: 4,
+    SPLAT_MIN_IMPACT: 92,
     SPLAT_POWER_RATIO: 1.12,
     SPLAT_RADIUS_WEIGHT: 4.8,
     SPLAT_SPEED_WEIGHT: 0.22,
@@ -1165,34 +1166,48 @@
       this.tx = player.x;
       this.ty = player.y;
       this.rethink = 0;
-      this.personality = rand(0.2, 1);
-      this.aggression = rand(0.15, 0.78);
+      this.personality = rand(0.25, 0.9);
+      // Keep bots closer to the calmer territory-first behaviour: they should
+      // pressure space, not hard tunnel the player every few seconds.
+      this.aggression = rand(0.04, 0.32);
+      this.wander = rand(0.25, 0.85);
     }
     update(dt, game) {
       const p = this.player;
       this.rethink -= dt;
-      if (this.rethink <= 0 || dist2(p.x, p.y, this.tx, this.ty) < 90 * 90) {
-        this.rethink = rand(0.45, 1.2);
+      if (this.rethink <= 0 || dist2(p.x, p.y, this.tx, this.ty) < 85 * 85) {
+        this.rethink = rand(0.75, 1.65);
         const enemy = game.closestEnemy(p);
-        const shouldHunt = enemy && Math.random() < this.aggression && p.r > enemy.r * 0.92 && dist2(p.x, p.y, enemy.x, enemy.y) < 420 * 420;
+        const enemyDist2 = enemy ? dist2(p.x, p.y, enemy.x, enemy.y) : Infinity;
+        const clearlyFavored = enemy && p.r > enemy.r * 1.18;
+        const shouldHunt = clearlyFavored
+          && enemyDist2 < 300 * 300
+          && Math.random() < this.aggression * 0.45;
         if (shouldHunt) {
-          this.tx = enemy.x + rand(-60, 60);
-          this.ty = enemy.y + rand(-60, 60);
+          // Aim near, not directly through, enemies so bot pressure feels less
+          // like a homing missile while preserving the same splat rules.
+          const side = rand(-1, 1);
+          const dx = enemy.x - p.x, dy = enemy.y - p.y;
+          const n = normalize(dx, dy);
+          this.tx = enemy.x - n.x * rand(45, 90) - n.y * side * rand(35, 90);
+          this.ty = enemy.y - n.y * rand(45, 90) + n.x * side * rand(35, 90);
         } else {
           const target = game.findPaintTarget(p.code, p.x, p.y, this.personality);
-          this.tx = target.x;
-          this.ty = target.y;
+          this.tx = target.x + rand(-45, 45) * this.wander;
+          this.ty = target.y + rand(-45, 45) * this.wander;
         }
       }
 
       const avoid = game.closestThreat(p);
       let ax = this.tx - p.x, ay = this.ty - p.y;
-      if (avoid && dist2(p.x, p.y, avoid.x, avoid.y) < 190 * 190 && avoid.r > p.r * 1.05) {
-        ax += (p.x - avoid.x) * 2.4;
-        ay += (p.y - avoid.y) * 2.4;
+      if (avoid && dist2(p.x, p.y, avoid.x, avoid.y) < 230 * 230 && avoid.r > p.r * 1.04) {
+        ax += (p.x - avoid.x) * 3.1;
+        ay += (p.y - avoid.y) * 3.1;
       }
       const n = normalize(ax, ay);
-      const boost = p.boost > 0.35 && (this.aggression > 0.52 || (avoid && avoid.r > p.r));
+      const farFromGoal = dist2(p.x, p.y, this.tx, this.ty) > 260 * 260;
+      const escaping = avoid && avoid.r > p.r * 1.04 && dist2(p.x, p.y, avoid.x, avoid.y) < 210 * 210;
+      const boost = p.boost > 0.52 && (escaping || (farFromGoal && Math.random() < 0.18));
       return { x: n.x, y: n.y, boost };
     }
   }
@@ -2192,7 +2207,7 @@
     updateHostControls() {
       const start = $('startRoundBtn');
       if (start) start.classList.add('hidden');
-      $('addBotBtn').classList.toggle('hidden', !(this.isHost && this.mode === 'host' && !this.roundActive));
+      $('addBotBtn').classList.toggle('hidden', !(this.isHost && this.mode === 'host' && !this.roundActive && !this.roundOver));
       this.updateRoomLobbyOverlay();
     }
     showRoomBadge(code) {
@@ -2329,7 +2344,7 @@
       this.updateRoomLobbyOverlay();
     }
     shouldShowRoomLobby() {
-      return this.mode !== 'menu' && this.mode !== 'local' && !!this.roomCode && !this.roundActive;
+      return this.mode !== 'menu' && this.mode !== 'local' && !!this.roomCode && !this.roundActive && !this.roundOver;
     }
     updateRoomLobbyOverlay() {
       const overlay = $('roomLobbyOverlay');
@@ -2350,8 +2365,8 @@
       $('lobbyStartBtn').classList.toggle('hidden', !(this.isHost && this.mode === 'host'));
       if (this.roundOver) {
         $('lobbyRoomText').textContent = this.isHost
-          ? `${winnerName} wins. Start the next round when everyone is ready.`
-          : `${winnerName} wins. Waiting for the host to start the next round.`;
+          ? `${winnerName} wins. Next round starts automatically.`
+          : `${winnerName} wins. Next round starts automatically.`;
       } else {
         $('lobbyRoomText').textContent = this.isHost
           ? 'Press Start when everyone has joined.'
@@ -2382,7 +2397,7 @@
         lastPaintX: 0, lastPaintY: 0, noInputTimer: 0, lastBumpAt: 0,
         wobble: 0, wobbleV: 0, squash: 0, stretch: 0, impactSquash: 0,
         impactX: 0, impactY: 0, impactLife: 0, boostPulse: 0, lastSpeed: 0, hitFlash: 0, roundEndFade: 0,
-        blob: null, blobAura: 0, facing: 0,
+        blob: null, blobAura: 0, facing: 0, trail: [],
         cosmeticSeed: Math.random() * 1000, lastSparkAt: 0, lastWallAt: 0
       };
     }
@@ -2405,10 +2420,11 @@
       p.blob = null;
       p.blobAura = 0;
       p.facing = 0;
+      p.trail = [{ x: p.x, y: p.y, r: p.r, t: this.frameNow || now(), life: 260, boost: 0 }];
     }
     addBotButton() {
       if (!this.isHost) return;
-      if (this.roundActive) { this.toast('Bots can join before the round starts.'); return; }
+      if (this.roundActive || this.roundOver) { this.toast('Bots can join before a round starts.'); return; }
       if (this.bots.size >= CONFIG.MAX_BOTS) { this.toast('Bot cap reached.'); return; }
       this.addBot();
       this.toast('Bot added.');
@@ -2549,6 +2565,7 @@
       this.shockwaves = [];
       this.ripples = [];
       this.speedLines = [];
+      for (const p of this.players.values()) p.trail = [];
     }
     applySnapshot(msg) {
       const wasRoundActive = this.roundActive;
@@ -2602,6 +2619,7 @@
           }
           p.r = sp.r; p.boost = sp.boost;
           p.alive = sp.alive; p.respawn = sp.respawn; p.isBot = sp.isBot; p.score = sp.score || 0;
+          if (!p.alive) p.trail = [];
           p.streak = Number.isFinite(Number(sp.streak)) ? Number(sp.streak) : Math.max(0, (p.streak || 0) * 0.94);
           p.splatStreak = sp.splatStreak || 0;
           p.input = { ...(p.input || { x: 0, y: 0, boost: false }), boost: !!sp.boosting };
@@ -2619,7 +2637,7 @@
         this.showWaitingBanner();
       }
       if (this.roundActive && !this.roundOver) {
-        if (!['go', 'countdown', 'lead'].includes(this.centerBanner?.kind)) this.centerBanner = null;
+        if (!['go'].includes(this.centerBanner?.kind)) this.centerBanner = null;
         this.hideRoomLobbyOverlay();
       } else {
         this.updateRoomLobbyOverlay();
@@ -2647,6 +2665,17 @@
         this.announceRoundStart(false);
       } else if (event.type === 'splat') {
         const p = this.players.get(event.victim) || { x: event.x, y: event.y, color: '#fff' };
+        const victim = this.players.get(event.victim);
+        if (victim) {
+          victim.alive = false;
+          victim.respawn = Math.max(victim.respawn || 0, 1.35);
+          victim.vx = 0;
+          victim.vy = 0;
+          victim.trail = [];
+          victim.impactSquash = Math.max(victim.impactSquash || 0, 0.34);
+        }
+        const killer = this.players.get(event.killer);
+        if (killer) killer.hitFlash = Math.max(killer.hitFlash || 0, 0.32);
         const x = Number(event.x) || p.x || CONFIG.WORLD_W / 2;
         const y = Number(event.y) || p.y || CONFIG.WORLD_H / 2;
         this.burst(x, y, event.color || p.color, 42, 1.35);
@@ -2712,60 +2741,52 @@
       }
       const sec = Math.ceil(this.matchTime);
       if (sec > 0 && sec <= CONFIG.LOW_TIME_SECONDS && sec !== this.lastCountdownSecond) {
+        // The HUD timer already communicates urgency; avoid center-screen
+        // countdown cards and shake that obscure late-round movement.
         this.lastCountdownSecond = sec;
-        const urgent = sec <= 3;
-        if (urgent || !this.centerBanner || this.centerBanner.life < 0.38 || this.centerBanner.kind === 'countdown') {
-          this.centerBanner = {
-            title: urgent ? String(sec) : `${sec}s`,
-            subtitle: urgent ? 'FINAL SPLASH!' : 'Endgame rush',
-            color: urgent ? '#ff5c8a' : '#ffd166',
-            life: urgent ? 0.82 : 0.58,
-            maxLife: urgent ? 0.82 : 0.58,
-            kind: 'countdown'
-          };
-        }
-        this.juice.countdown(sec);
-        if (urgent) this.juice.shake = Math.max(this.juice.shake, 3.2);
       }
     }
     announceLeadChange(p) {
       if (!p || !this.roundActive || this.roundOver) return;
       this.lastLeadAnnounceAt = now();
-      this.centerBanner = {
-        title: p.id === this.myId ? 'YOU LEAD!' : 'LEAD TAKEN',
-        subtitle: p.name,
-        color: p.color || '#ffd166',
-        life: 1.05,
-        maxLife: 1.05,
-        kind: 'lead'
-      };
-      this.floatText(p.x, p.y - p.r - 40, 'LEAD!', '#ffd166', 1.2);
-      this.shockwave(p.x, p.y, '#ffd166', p.r * 3.2);
-      this.sparkBurst(p.x, p.y - p.r * 0.45, '#ffd166', this.useLowFx() ? 6 : 16, 0.9);
+      this.floatText(p.x, p.y - p.r - 40, p.id === this.myId ? 'YOU LEAD' : 'LEAD', '#ffd166', 0.95);
+      if (!this.useLowFx()) {
+        this.shockwave(p.x, p.y, '#ffd166', p.r * 2.15);
+        this.sparkBurst(p.x, p.y - p.r * 0.45, '#ffd166', this.useMediumFx() ? 4 : 8, 0.55);
+      }
       this.juice.leadChange(p.id === this.myId);
-      this.toast(p.id === this.myId ? 'You took the lead!' : `${p.name} took the lead!`, 1300);
+      this.toast(p.id === this.myId ? 'You took the lead!' : `${p.name} took the lead!`, 950);
     }
     tickHost(dt) {
+      const myInput = this.input.getState();
+      const me = this.players.get(this.myId);
+      if (me) me.input = myInput;
+
+      if (this.roundOver) {
+        this.juice.boost(false);
+        this.roundOverTimer = Math.max(0, (this.roundOverTimer || 0) - dt);
+        if (this.roundOverTimer <= 0) {
+          this.startRound();
+          this.sendRoundStartSnapshot();
+        } else {
+          this.networkHost(dt);
+          this.updateHostControls();
+          return;
+        }
+      }
+
       if (!this.roundActive) {
-        const myInput = this.input.getState();
-        const me = this.players.get(this.myId);
-        if (me) me.input = myInput;
         this.juice.boost(false);
         this.networkHost(dt);
         this.updateHostControls();
         return;
       }
-      if (this.roundOver) {
-        this.networkHost(dt);
-        this.updateHostControls();
+
+      this.matchTime -= dt;
+      if (this.matchTime <= 0) {
+        this.endRound();
         return;
-      } else {
-        this.matchTime -= dt;
-        if (this.matchTime <= 0) this.endRound();
       }
-      const myInput = this.input.getState();
-      const me = this.players.get(this.myId);
-      if (me) me.input = myInput;
 
       for (const brain of this.bots.values()) brain.player.input = brain.update(dt, this);
       for (const p of this.players.values()) this.updatePlayer(p, dt);
@@ -2812,6 +2833,7 @@
       p.vx = lerp(p.vx, p.targetVx || 0, blend);
       p.vy = lerp(p.vy, p.targetVy || 0, blend);
       this.updateJello(p, dt, p.input?.boost && p.boost > 0.05);
+      this.updateMotionTrail(p, dt, p.input?.boost && p.boost > 0.05, Math.hypot(p.vx || 0, p.vy || 0));
     }
     updatePlayer(p, dt) {
       if (!p.alive) {
@@ -2877,6 +2899,7 @@
       }
 
       this.updateJello(p, dt, wantsBoost);
+      this.updateMotionTrail(p, dt, wantsBoost, speed);
 
       const paintRadius = p.r * (wantsBoost ? 1.22 : 1.08);
       const gained = this.depositPaintTrail(p, beforeX, beforeY, p.x, p.y, paintRadius, dt, wantsBoost ? 2.05 : 1.55);
@@ -2894,7 +2917,7 @@
         const prevTier = Math.floor(beforeStreak / CONFIG.STREAK_TIER);
         if (p.id === this.myId && tier > prevTier && now() - (p.lastStreakPopAt || 0) > 550) {
           p.lastStreakPopAt = now();
-          const labels = ['RUSH', 'SPLASH RUSH', 'MEGA SPLASH', 'PAINT STORM'];
+          const labels = ['RUSH', 'SPLASH RUSH', 'MEGA SPLASH'];
           const label = labels[Math.min(labels.length - 1, tier - 1)] || 'RUSH';
           this.floatText(p.x, p.y - p.r - 28, label, p.color, 1 + tier * 0.08);
           this.juice.streak(p.streak);
@@ -2910,15 +2933,15 @@
           p.combo = 0;
         }
       }
-      if (wantsBoost && speed > 120 && !this.useLowFx() && Math.random() < (this.useMediumFx() ? 0.34 : 0.58)) {
+      if (wantsBoost && speed > 145 && !this.useLowFx() && Math.random() < (this.useMediumFx() ? 0.16 : 0.28)) {
         this.speedLine(
           p.x - p.vx * rand(0.045, 0.075) + rand(-p.r * 0.22, p.r * 0.22),
           p.y - p.vy * rand(0.045, 0.075) + rand(-p.r * 0.22, p.r * 0.22),
           p.vx,
           p.vy,
           p.color,
-          rand(6, 14),
-          rand(0.2, 0.36)
+          rand(2.2, 5.6),
+          rand(0.16, 0.26)
         );
       }
       const movedPaint = Math.hypot(p.x - p.lastPaintX, p.y - p.lastPaintY);
@@ -3047,6 +3070,32 @@
       this.updateBlobMesh(p, dt, boosting);
       p.lastSpeed = speed;
     }
+    updateMotionTrail(p, dt, boosting = false, speed = 0) {
+      if (!p || !p.alive || this.useLowFx()) {
+        if (p) p.trail = [];
+        return;
+      }
+      if (!Array.isArray(p.trail)) p.trail = [];
+      const t = this.frameNow || now();
+      const maxAge = boosting ? 560 : 380;
+      while (p.trail.length && t - p.trail[0].t > Math.max(maxAge, p.trail[0].life || maxAge)) p.trail.shift();
+      const minDist = boosting ? 6 : 10;
+      const last = p.trail[p.trail.length - 1];
+      if (!last || dist2(p.x, p.y, last.x, last.y) >= minDist * minDist) {
+        p.trail.push({
+          x: p.x,
+          y: p.y,
+          r: p.r,
+          t,
+          life: boosting ? 520 : 340,
+          boost: boosting ? 1 : 0,
+          speed: clamp(speed / 460, 0, 1)
+        });
+      }
+      const cap = this.useMediumFx() ? 9 : 14;
+      if (p.trail.length > cap) p.trail.splice(0, p.trail.length - cap);
+    }
+
     depositPaintTrail(p, x0, y0, x1, y1, radius, dt, powerScale) {
       const d = Math.hypot(x1 - x0, y1 - y0);
       const steps = clamp(Math.ceil(d / CONFIG.TRAIL_DEPOSIT_STEP), 1, 14);
@@ -3071,19 +3120,37 @@
           const dx = b.x - a.x, dy = b.y - a.y;
           const d = Math.hypot(dx, dy) || 1;
           const min = a.r + b.r;
-          if (d >= min) continue;
+          const padding = CONFIG.SPLAT_CONTACT_PADDING || 0;
+          if (d >= min + padding) continue;
           const nx = dx / d, ny = dy / d;
           const av = a.vx * nx + a.vy * ny;
           const bv = b.vx * nx + b.vy * ny;
-          const rel = av - bv;
-          const impact = Math.abs(rel);
-          if (!this.roundOver && impact > 24) {
+          const closing = Math.max(0, av - bv);
+          const impact = closing;
+
+          if (!this.roundOver && impact > CONFIG.SPLAT_MIN_IMPACT) {
             const aPower = this.splatPower(a);
             const bPower = this.splatPower(b);
-            if (impact > CONFIG.SPLAT_MIN_IMPACT && aPower > bPower * CONFIG.SPLAT_POWER_RATIO) this.splat(b, a, impact, aPower, bPower, nx, ny);
-            else if (impact > CONFIG.SPLAT_MIN_IMPACT && bPower > aPower * CONFIG.SPLAT_POWER_RATIO) this.splat(a, b, impact, bPower, aPower, -nx, -ny);
-            else this.bumpPlayers(a, b, impact, nx, ny);
+            let didSplat = false;
+            if (aPower > bPower * CONFIG.SPLAT_POWER_RATIO) didSplat = this.splat(b, a, impact, aPower, bPower, nx, ny);
+            else if (bPower > aPower * CONFIG.SPLAT_POWER_RATIO) didSplat = this.splat(a, b, impact, bPower, aPower, -nx, -ny);
+            if (didSplat) continue;
           }
+
+          const overlap = Math.max(0, min - d);
+          if (overlap > 0) {
+            const push = Math.min(16, overlap * CONFIG.COLLISION_PUSH + 0.35);
+            a.x = clamp(a.x - nx * push, a.r, CONFIG.WORLD_W - a.r);
+            a.y = clamp(a.y - ny * push, a.r, CONFIG.WORLD_H - a.r);
+            b.x = clamp(b.x + nx * push, b.r, CONFIG.WORLD_W - b.r);
+            b.y = clamp(b.y + ny * push, b.r, CONFIG.WORLD_H - b.r);
+            if (closing > 0 && CONFIG.COLLISION_BOUNCE > 0) {
+              const impulse = Math.min(85, closing * CONFIG.COLLISION_BOUNCE);
+              a.vx -= nx * impulse; a.vy -= ny * impulse;
+              b.vx += nx * impulse; b.vy += ny * impulse;
+            }
+          }
+          if (impact > 18 || overlap > 1.5) this.bumpPlayers(a, b, Math.max(impact, overlap * 10), nx, ny);
         }
       }
     }
@@ -3104,7 +3171,7 @@
       if (a.id === this.myId || b.id === this.myId) this.juice.hit(force);
     }
     splat(victim, killer, impact = 0, winnerPower = 0, loserPower = 0, nx = 0, ny = 0) {
-      if (!victim.alive || victim.respawn > 0) return;
+      if (!victim.alive || victim.respawn > 0) return false;
       victim.alive = false;
       victim.respawn = 1.9;
       victim.vx = victim.vy = 0;
@@ -3112,6 +3179,7 @@
       victim.impactX = nx; victim.impactY = ny; victim.impactLife = 0.32;
       victim.streak = 0;
       victim.splatStreak = 0;
+      victim.trail = [];
       const t = now();
       killer.splatStreak = (t - (killer.lastSplatAt || 0) < 6500 ? (killer.splatStreak || 0) : 0) + 1;
       killer.lastSplatAt = t;
@@ -3135,6 +3203,7 @@
       }
       this.cameraPulse = Math.max(this.cameraPulse, 1);
       this.broadcastEventSafe({ type: 'splat', victim: victim.id, victimName: victim.name, killer: killer.id, killerName: killer.name, streak: killer.splatStreak, x: victim.x, y: victim.y, color: victim.color, killerColor: killer.color, impact });
+      return true;
     }
     endRound() {
       const live = Array.from(this.players.values());
@@ -3299,7 +3368,7 @@
     }
     speedLine(x, y, vx, vy, color, width = 10, life = 0.28) {
       if (this.useLowFx()) return;
-      const cap = this.useMediumFx() ? 34 : 62;
+      const cap = this.useMediumFx() ? 18 : 34;
       if (this.speedLines.length > cap) this.speedLines.splice(0, this.speedLines.length - cap);
       const speed = Math.hypot(vx, vy) || 1;
       this.speedLines.push({
@@ -3312,7 +3381,7 @@
         w: width,
         life,
         maxLife: life,
-        len: clamp(speed * rand(0.07, 0.13), 18, 70)
+        len: clamp(speed * rand(0.045, 0.085), 10, 42)
       });
     }
     sparkBurst(x, y, color, count = 12, force = 1) {
@@ -3435,6 +3504,7 @@
 
       this.drawWorld(ctx);
       this.drawInkRipples(ctx);
+      this.drawPlayerTrails(ctx);
       this.drawSpeedLines(ctx);
       this.drawParticles(ctx, false);
       this.drawShockwaves(ctx);
@@ -3620,16 +3690,16 @@
         if (!this.isWorldVisible(l.x, l.y, l.len + l.w)) continue;
         const a = clamp(l.life / l.maxLife, 0, 1);
         const tail = l.len * (0.7 + (1 - a) * 0.65);
-        ctx.globalAlpha = a * 0.52;
+        ctx.globalAlpha = a * 0.28;
         ctx.strokeStyle = rgba(l.color, 0.9);
-        ctx.lineWidth = Math.max(1.5, l.w * a);
+        ctx.lineWidth = Math.max(1, l.w * a);
         ctx.beginPath();
         ctx.moveTo(l.x, l.y);
         ctx.lineTo(l.x - l.nx * tail, l.y - l.ny * tail);
         ctx.stroke();
-        ctx.globalAlpha = a * 0.22;
+        ctx.globalAlpha = a * 0.12;
         ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-        ctx.lineWidth = Math.max(1, l.w * 0.32 * a);
+        ctx.lineWidth = Math.max(1, l.w * 0.22 * a);
         ctx.beginPath();
         ctx.moveTo(l.x + l.ny * 3, l.y - l.nx * 3);
         ctx.lineTo(l.x - l.nx * tail * 0.62 + l.ny * 3, l.y - l.ny * tail * 0.62 - l.nx * 3);
@@ -3637,6 +3707,52 @@
       }
       ctx.restore();
     }
+    drawPlayerTrails(ctx) {
+      if (this.useLowFx()) return;
+      const t = this.frameNow || now();
+      const mediumFx = this.useMediumFx();
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for (const p of this.players.values()) {
+        const trail = p.trail;
+        if (!p.alive || !Array.isArray(trail) || trail.length < 2) continue;
+        if (!this.isWorldVisible(p.x, p.y, (p.r || CONFIG.BASE_RADIUS) + 130)) continue;
+        const maxSegments = mediumFx ? 6 : 10;
+        const start = Math.max(1, trail.length - maxSegments);
+        for (let i = start; i < trail.length; i++) {
+          const a = trail[i - 1];
+          const b = trail[i];
+          const age = t - b.t;
+          const life = b.life || 360;
+          if (age > life) continue;
+          const fade = clamp(1 - age / life, 0, 1);
+          const order = i / Math.max(1, trail.length - 1);
+          const width = Math.max(2, (b.r || p.r) * (0.32 + b.speed * 0.28 + b.boost * 0.16) * fade * (0.5 + order * 0.5));
+          const midX = (a.x + b.x) * 0.5;
+          const midY = (a.y + b.y) * 0.5;
+          ctx.globalAlpha = fade * (0.13 + b.boost * 0.06);
+          ctx.strokeStyle = rgba(p.color, 0.72);
+          ctx.lineWidth = width;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.quadraticCurveTo(midX, midY, b.x, b.y);
+          ctx.stroke();
+          if (!mediumFx && b.boost) {
+            ctx.globalAlpha = fade * 0.1;
+            ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+            ctx.lineWidth = Math.max(1, width * 0.28);
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.quadraticCurveTo(midX, midY, b.x, b.y);
+            ctx.stroke();
+          }
+        }
+      }
+      ctx.restore();
+    }
+
     drawCombatHints(ctx) {
       if (!this.roundActive || this.roundOver || this.useLowFx()) return;
       const me = this.players.get(this.myId);
@@ -3811,7 +3927,8 @@
       ctx.save();
       ctx.globalAlpha = 1 - roundFade * 0.28;
       ctx.translate(p.x, p.y);
-      ctx.rotate(angle);
+      // Lighting stays anchored instead of spinning with movement; the blob
+      // mesh itself already stretches toward p.facing.
       ctx.scale(pulse * (1 + roundFade * 0.08), pulse * (1 - roundFade * 0.16));
 
       if (aura > 0.02) {
@@ -3923,22 +4040,17 @@
       ctx.fillText(name, 0, 0);
       if (this.leaderCode === p.code && this.players.size > 1) {
         ctx.save();
-        ctx.translate(0, -26);
-        ctx.globalAlpha = 0.92;
-        ctx.fillStyle = '#ffd166';
-        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(-13, 5);
-        ctx.lineTo(-8, -8);
-        ctx.lineTo(-2, 2);
-        ctx.lineTo(0, -11);
-        ctx.lineTo(6, 2);
-        ctx.lineTo(12, -8);
-        ctx.lineTo(13, 5);
-        ctx.closePath();
-        ctx.stroke();
+        ctx.translate(0, -27);
+        ctx.globalAlpha = 0.86;
+        ctx.fillStyle = 'rgba(255,209,102,0.18)';
+        ctx.strokeStyle = 'rgba(255,209,102,0.58)';
+        ctx.lineWidth = 1.4;
+        roundRect(ctx, -19, -8, 38, 16, 8);
         ctx.fill();
+        ctx.stroke();
+        ctx.font = '900 9px ui-rounded, system-ui, sans-serif';
+        ctx.fillStyle = '#fff7cc';
+        ctx.fillText('LEAD', 0, 0);
         ctx.restore();
       }
       ctx.restore();
@@ -4105,41 +4217,20 @@
       if (!target || !target.alive || this.useLowFx()) return;
       const speed = Math.hypot(target.vx || 0, target.vy || 0);
       const streak = clamp((target.streak || 0) / CONFIG.STREAK_MAX, 0, 1);
-      const lowTime = this.roundActive && !this.roundOver && this.matchTime <= CONFIG.LOW_TIME_SECONDS ? 0.22 : 0;
-      const rush = clamp((speed - 190) / 430 + streak * 0.48 + lowTime, 0, 1);
-      if (rush <= 0.05) return;
-      const angle = speed > 8 ? Math.atan2(target.vy || 0, target.vx || 0) : (target.facing || 0);
+      const lowTime = this.roundActive && !this.roundOver && this.matchTime <= CONFIG.LOW_TIME_SECONDS ? 0.12 : 0;
+      const rush = clamp((speed - 220) / 520 + streak * 0.26 + lowTime, 0, 1);
+      if (rush <= 0.18) return;
+      // Keep high-speed feedback out of the playfield center. The old screen
+      // streaks read as a rigid striped box; the real trail now follows the
+      // player in world space via drawPlayerTrails().
       const cx = w * 0.5, cy = h * 0.5;
-      const nx = Math.cos(angle), ny = Math.sin(angle);
-      const sx = -ny, sy = nx;
-      const count = this.useMediumFx() ? 12 : 22;
-      const t = (this.frameNow || now()) * 0.001;
+      const vignette = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.28, cx, cy, Math.max(w, h) * 0.72);
+      vignette.addColorStop(0, 'rgba(255,255,255,0)');
+      vignette.addColorStop(1, rgba(target.color || '#ffffff', 0.025 + rush * 0.035));
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
-      ctx.lineCap = 'round';
-      for (let i = 0; i < count; i++) {
-        const hsh = hash01(i * 19 + target.code * 7);
-        const phase = (hsh + t * (0.38 + rush * 0.75)) % 1;
-        const side = (hash01(i * 23 + 5) - 0.5) * w * (0.26 + rush * 0.24);
-        const depth = (0.16 + phase * 0.74) * Math.max(w, h);
-        const len = (24 + phase * 70) * dpr * rush;
-        const x = cx - nx * depth + sx * side;
-        const y = cy - ny * depth + sy * side;
-        ctx.globalAlpha = (1 - phase) * (0.08 + rush * 0.16);
-        ctx.strokeStyle = rgba(target.color || '#ffffff', 0.82);
-        ctx.lineWidth = Math.max(1, (1.2 + rush * 2.8) * dpr * (1 - phase * 0.4));
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x + nx * len, y + ny * len);
-        ctx.stroke();
-      }
-      if (this.matchTime <= CONFIG.LOW_TIME_SECONDS && this.roundActive && !this.roundOver) {
-        const vignette = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.15, cx, cy, Math.max(w, h) * 0.72);
-        vignette.addColorStop(0, 'rgba(255,92,138,0)');
-        vignette.addColorStop(1, `rgba(255,92,138,${0.05 + rush * 0.07})`);
-        ctx.fillStyle = vignette;
-        ctx.fillRect(0, 0, w, h);
-      }
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, w, h);
       ctx.restore();
     }
     drawThreatArrows(ctx, w, h, dpr, target) {
@@ -4276,7 +4367,7 @@
 
       let roundState;
       if (!this.roundActive && !this.roundOver) roundState = this.isHost ? 'Waiting - press Start' : 'Waiting for host';
-      else if (this.roundOver && this.winner) roundState = `${this.winner.name || 'Winner'} wins - host starts next`;
+      else if (this.roundOver && this.winner) roundState = `${this.winner.name || 'Winner'} wins - next round soon`;
       else roundState = this.isHost ? 'Paint, boost, splat' : 'Connected to host';
       if (force || roundState !== this.lastRoundStateText) {
         $('roundState').textContent = roundState;
