@@ -44,3 +44,17 @@ These are intentionally conservative. The round flow and host-authoritative arch
 
 ### Performance guardrails
 - Cosmetic ripples, caustic blob highlights, extra particle density, and high-detail blob meshes are disabled or reduced in Low quality and automatically throttled when Auto quality detects low FPS.
+
+## 0.4.x deep polish pass
+
+### Visual feedback
+- Wet ink ripples now render with a darker depth pass and a screen-highlight pass.
+- Paint borders use stronger directional rim/underside shading while keeping the existing ownership grid.
+- Enemy paint conversion now emits tiny color-shifting ink peel flecks.
+- Blob bodies react to collision direction, get stronger internal caustic strokes, and show a wet boost rim.
+- Boosting and splats add subtle camera zoom pulses; round wins add a color flash and capped confetti droplets.
+
+### Audio/UI
+- Procedural music now ducks briefly under splats and round-end cues.
+- Paint, conversion, boost, bump, and splat sounds were rebalanced softer and less beepy.
+- Leaderboard, boost meter, room lobby, buttons, and joystick gained feedback-only polish with no layout or control changes.

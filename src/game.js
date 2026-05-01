@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.4.0-audio-polish',
+    VERSION: '0.4.1-deep-polish',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_GAME_VERSION: 'roads-splash-io-v1',
@@ -26,6 +26,14 @@
     ROOM_CODE_LENGTH: 3,
     LOBBY_REFRESH_MS: 5000,
     SIGNALING_HEARTBEAT_MS: 15000,
+    RIPPLE_CAP_MEDIUM: 36,
+    RIPPLE_CAP_HIGH: 64,
+    CONVERT_FLECK_CAP_MEDIUM: 3,
+    CONVERT_FLECK_CAP_HIGH: 5,
+    CAMERA_BOOST_ZOOM: 0.975,
+    CAMERA_SPLAT_ZOOM: 0.96,
+    MUSIC_DUCK_SPLAT: 0.42,
+    MUSIC_DUCK_ROUND: 0.56,
 
     BASE_RADIUS: 19,
     MAX_RADIUS_BONUS: 14,
@@ -118,6 +126,23 @@
     const c = hexToRgb(hex);
     return `rgba(${c.r},${c.g},${c.b},${a})`;
   }
+  function alphaColor(color, a) {
+    if (String(color).startsWith('#')) return rgba(color, a);
+    const m = String(color).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    return m ? `rgba(${m[1]},${m[2]},${m[3]},${a})` : color;
+  }
+  function rgbToHex(c) {
+    const h = (n) => clamp(Math.round(n), 0, 255).toString(16).padStart(2, '0');
+    return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
+  }
+  function mixColor(a, b, t) {
+    const ca = hexToRgb(a);
+    const cb = hexToRgb(b);
+    const r = Math.round(lerp(ca.r, cb.r, t));
+    const g = Math.round(lerp(ca.g, cb.g, t));
+    const bl = Math.round(lerp(ca.b, cb.b, t));
+    return `rgb(${r},${g},${bl})`;
+  }
   function lighten(hex, amount) {
     const c = hexToRgb(hex);
     const r = Math.round(lerp(c.r, 255, amount));
@@ -176,6 +201,7 @@
       this.ctx = null;
       this.masterGain = null;
       this.compressor = null;
+      this.duckGain = null;
       this.musicGain = null;
       this.sfxGain = null;
       this.noiseBuffer = null;
@@ -211,8 +237,10 @@
           this.masterGain.connect(this.compressor).connect(this.ctx.destination);
 
           this.musicGain = this.ctx.createGain();
-          this.musicGain.gain.value = 0.18;
-          this.musicGain.connect(this.masterGain);
+          this.musicGain.gain.value = 0.2;
+          this.duckGain = this.ctx.createGain();
+          this.duckGain.gain.value = 1;
+          this.duckGain.connect(this.musicGain).connect(this.masterGain);
           this.sfxGain = this.ctx.createGain();
           this.sfxGain.gain.value = 0.95;
           this.sfxGain.connect(this.masterGain);
@@ -309,6 +337,17 @@
       source.start(t);
       source.stop(t + dur + 0.035);
     }
+    duckMusic(amount = CONFIG.MUSIC_DUCK_SPLAT, seconds = 0.42) {
+      if (!this.enabled) return;
+      this.unlock();
+      const ctx = this.ctx;
+      if (!ctx || !this.duckGain) return;
+      const t = ctx.currentTime;
+      const floor = clamp(amount, 0.28, 0.92);
+      this.duckGain.gain.cancelScheduledValues(t);
+      this.duckGain.gain.setValueAtTime(Math.max(0.0001, floor), t);
+      this.duckGain.gain.exponentialRampToValueAtTime(1, t + seconds);
+    }
     beep(freq = 420, dur = 0.055, type = 'sine', vol = 0.035) { this.tone(freq, dur, type, vol); }
     paint(amount = 1) {
       if (!this.enabled || !this.ctx) return;
@@ -316,12 +355,12 @@
       if (t - this.lastPaintSound < 0.075) return;
       this.lastPaintSound = t;
       const m = Math.min(1, amount / 18);
-      this.tone(430 + m * 220 + Math.random() * 35, 0.055, 'triangle', 0.018 + m * 0.012, this.sfxGain, t, {
+      this.tone(430 + m * 220 + Math.random() * 35, 0.055, 'triangle', 0.014 + m * 0.009, this.sfxGain, t, {
         attack: 0.006,
         slide: 0.86,
         filter: { type: 'lowpass', freq: 2200, to: 900, q: 0.8 }
       });
-      this.noiseBurst(0.05 + m * 0.03, 0.012 + m * 0.008, 1900 + m * 900, 'bandpass', this.sfxGain, t, { q: 1.4, to: 950 });
+      this.noiseBurst(0.05 + m * 0.03, 0.01 + m * 0.006, 1900 + m * 900, 'bandpass', this.sfxGain, t, { q: 1.4, to: 950 });
     }
     boost(on) {
       this.boostShake = on ? CONFIG.BOOST_SHAKE : 0;
@@ -350,10 +389,10 @@
           this.boostNoise.connect(this.boostFilter).connect(this.boostNoiseGain).connect(this.sfxGain);
           this.boostNoise.start();
         }
-        this.tone(210, 0.08, 'triangle', 0.032, this.sfxGain, ctx.currentTime, { slide: 1.45, attack: 0.005 });
+        this.tone(210, 0.08, 'triangle', 0.018, this.sfxGain, ctx.currentTime, { slide: 1.45, attack: 0.005 });
       }
-      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.012 : 0.0001, ctx.currentTime, 0.055);
-      if (this.boostNoiseGain) this.boostNoiseGain.gain.setTargetAtTime(on ? 0.011 : 0.0001, ctx.currentTime, 0.055);
+      if (this.boostGain) this.boostGain.gain.setTargetAtTime(on ? 0.007 : 0.0001, ctx.currentTime, 0.055);
+      if (this.boostNoiseGain) this.boostNoiseGain.gain.setTargetAtTime(on ? 0.01 : 0.0001, ctx.currentTime, 0.055);
       if (!on && this.boostOsc) this.stopBoost(180);
     }
     stopBoost(delayMs = 120) {
@@ -378,9 +417,9 @@
     }
     hit(force = 1) {
       const f = clamp(force, 0.35, 1.8);
-      this.noiseBurst(0.08 + f * 0.02, 0.035 + f * 0.012, 190, 'lowpass', this.sfxGain, null, { q: 0.6, to: 70 });
-      this.tone(150 + f * 32, 0.11, 'triangle', 0.04, this.sfxGain, null, { slide: 0.65, attack: 0.004 });
-      this.tone(390 + f * 80, 0.055, 'sine', 0.025, this.sfxGain, this.ctx ? this.ctx.currentTime + 0.015 : null, { slide: 1.18 });
+      this.noiseBurst(0.08 + f * 0.02, 0.028 + f * 0.01, 190, 'lowpass', this.sfxGain, null, { q: 0.6, to: 70 });
+      this.tone(150 + f * 32, 0.11, 'triangle', 0.032, this.sfxGain, null, { slide: 0.65, attack: 0.004 });
+      this.tone(390 + f * 80, 0.055, 'sine', 0.018, this.sfxGain, this.ctx ? this.ctx.currentTime + 0.015 : null, { slide: 1.18 });
       this.shake = Math.max(this.shake, 5 + f * 3);
       this.vibrate(18);
     }
@@ -390,8 +429,8 @@
       if (t - this.lastConvertSound < 0.12) return;
       this.lastConvertSound = t;
       const m = Math.min(1, amount / 24);
-      this.tone(310 + m * 190, 0.07, 'triangle', 0.026, this.sfxGain, t, { slide: 1.32, attack: 0.006 });
-      this.noiseBurst(0.065, 0.012 + m * 0.012, 1250 + m * 900, 'bandpass', this.sfxGain, t, { q: 1.1, to: 2200 });
+      this.tone(310 + m * 190, 0.07, 'triangle', 0.023, this.sfxGain, t, { slide: 1.32, attack: 0.006 });
+      this.noiseBurst(0.065, 0.011 + m * 0.01, 1250 + m * 900, 'bandpass', this.sfxGain, t, { q: 1.1, to: 2200 });
     }
     join() {
       if (!this.enabled) return;
@@ -404,15 +443,16 @@
     splat(strength = 1, own = false) {
       const s = clamp(strength, 0.65, 1.7);
       const t = this.ctx ? this.ctx.currentTime : null;
-      this.noiseBurst(0.18 * s, 0.085 * s, 620, 'lowpass', this.sfxGain, t, { q: 0.5, to: 150 });
-      this.noiseBurst(0.13 * s, 0.045 * s, 2400, 'bandpass', this.sfxGain, t, { q: 1.2, to: 900 });
-      this.tone(82, 0.19, 'triangle', 0.085 * s, this.sfxGain, t, { slide: 0.48, attack: 0.004 });
-      this.tone(245, 0.11, 'sawtooth', 0.036 * s, this.sfxGain, this.ctx ? t + 0.025 : null, {
+      this.duckMusic(CONFIG.MUSIC_DUCK_SPLAT, 0.42);
+      this.noiseBurst(0.18 * s, 0.075 * s, 620, 'lowpass', this.sfxGain, t, { q: 0.5, to: 150 });
+      this.noiseBurst(0.13 * s, 0.038 * s, 2400, 'bandpass', this.sfxGain, t, { q: 1.2, to: 900 });
+      this.tone(82, 0.19, 'triangle', 0.076 * s, this.sfxGain, t, { slide: 0.48, attack: 0.004 });
+      this.tone(245, 0.11, 'sawtooth', 0.03 * s, this.sfxGain, this.ctx ? t + 0.025 : null, {
         slide: 0.72,
         attack: 0.004,
         filter: { type: 'lowpass', freq: 1200, to: 420, q: 0.8 }
       });
-      this.tone(690, 0.08, 'sine', 0.032, this.sfxGain, this.ctx ? t + 0.045 : null, { slide: 1.2 });
+      this.tone(690, 0.08, 'sine', 0.026, this.sfxGain, this.ctx ? t + 0.045 : null, { slide: 1.2 });
       this.shake = Math.max(this.shake, (own ? CONFIG.OWN_SPLAT_SHAKE : CONFIG.SPLAT_SHAKE) * s);
       this.flash = Math.max(this.flash, own ? 0.3 : 0.22);
       this.vibrate(own ? [30, 20, 45] : 28);
@@ -422,6 +462,7 @@
       this.unlock();
       if (!this.ctx) return;
       const t = this.ctx.currentTime;
+      this.duckMusic(CONFIG.MUSIC_DUCK_ROUND, 0.58);
       const notes = [392, 494, 587, 740, 784];
       notes.forEach((f, i) => this.tone(f, 0.24, i === notes.length - 1 ? 'sine' : 'triangle', 0.034, this.sfxGain, t + i * 0.095, { slide: i === notes.length - 1 ? 1.01 : 1.08, attack: 0.01 }));
       this.tone(196, 0.72, 'sine', 0.045, this.sfxGain, t, { sustain: 0.35, attack: 0.02 });
@@ -433,7 +474,7 @@
       const intervals = [0, 3, 7, 10];
       intervals.forEach((semi, i) => {
         const f = root * Math.pow(2, semi / 12);
-        this.tone(f, dur, i === 0 ? 'sine' : 'triangle', 0.012 / (i ? 1 : 0.8), this.musicGain, at + i * 0.006, {
+        this.tone(f, dur, i === 0 ? 'sine' : 'triangle', 0.014 / (i ? 1 : 0.8), this.duckGain, at + i * 0.006, {
           attack: 0.045,
           sustain: 0.36,
           filter: { type: 'lowpass', freq: 1450, to: 650, q: 0.5 }
@@ -457,17 +498,17 @@
         const t = this.nextMusicAt;
         const root = roots[bar];
 
-        if (beat === 0 || beat === 8) this.musicChord(root, t, beat === 0 ? 1.05 : 0.7);
+        if (beat === 0 || beat === 8) this.musicChord(root, t, beat === 0 ? 1.18 : 0.74);
         if (beat % 4 === 0) {
-          this.tone(root / 2, 0.22, 'triangle', 0.038, this.musicGain, t, { slide: 0.86, attack: 0.006, filter: { type: 'lowpass', freq: 480, to: 220, q: 0.5 } });
-          this.noiseBurst(0.052, 0.024, 95, 'lowpass', this.musicGain, t, { q: 0.6, to: 55, attack: 0.002 });
+          this.tone(root / 2, 0.22, 'triangle', 0.034, this.duckGain, t, { slide: 0.86, attack: 0.006, filter: { type: 'lowpass', freq: 480, to: 220, q: 0.5 } });
+          this.noiseBurst(0.052, 0.018, 95, 'lowpass', this.duckGain, t, { q: 0.6, to: 55, attack: 0.002 });
         }
-        if (beat === 6 || beat === 14) this.noiseBurst(0.048, 0.011, 3200, 'highpass', this.musicGain, t, { q: 0.3 });
-        if (beat % 2 === 1) this.noiseBurst(0.028, 0.0055, 5200, 'highpass', this.musicGain, t, { q: 0.3 });
+        if (beat === 6 || beat === 14) this.noiseBurst(0.048, 0.0075, 3200, 'highpass', this.duckGain, t, { q: 0.3 });
+        if (beat % 2 === 1) this.noiseBurst(0.028, 0.0038, 5200, 'highpass', this.duckGain, t, { q: 0.3 });
         if (beat === 3 || beat === 7 || beat === 11 || beat === 15) {
           const idx = (step * 3 + bar * 2) % leadScale.length;
           const f = root * Math.pow(2, (leadScale[idx] + 12) / 12);
-          this.tone(f, 0.12, 'triangle', 0.014, this.musicGain, t, { slide: 0.92, attack: 0.006, filter: { type: 'lowpass', freq: 2500, to: 1250, q: 0.7 } });
+          this.tone(f, 0.12, 'triangle', 0.011, this.duckGain, t, { slide: 0.92, attack: 0.006, filter: { type: 'lowpass', freq: 2500, to: 1250, q: 0.7 } });
         }
         this.nextMusicAt += stepDur;
       }
@@ -535,6 +576,7 @@
         this.touchStick.y = clientY;
         this.touchStick.startedAt = performance.now();
         this.touchStick.vectorUntil = performance.now() + 220;
+        this.stick.classList.add('dragging');
         if (e?.pointerId !== undefined) {
           try { this.stick.setPointerCapture?.(e.pointerId); } catch (_) {}
         }
@@ -558,6 +600,9 @@
         this.touchStick.touchId = null;
         this.touchStick.pointerId = null;
         this.nub.style.transform = 'translate(0px, 0px)';
+        this.stick.classList.remove('dragging');
+        this.stick.style.setProperty('--stick-x', '0px');
+        this.stick.style.setProperty('--stick-y', '0px');
       };
       const startStick = (e) => startStickAt(e.clientX, e.clientY, e, e.pointerType === 'mouse' ? 'mouse' : 'touch');
       const moveStick = (e) => { if (this.touchStick.active) moveStickAt(e.clientX, e.clientY); };
@@ -647,6 +692,9 @@
       this.boostDown = false;
       this.boostButton.classList.remove('down');
       this.nub.style.transform = 'translate(0px, 0px)';
+      this.stick.classList.remove('dragging');
+      this.stick.style.setProperty('--stick-x', '0px');
+      this.stick.style.setProperty('--stick-y', '0px');
       this.lastState = { x: 0, y: 0, boost: false };
       this.juice.boost(false);
     }
@@ -656,6 +704,8 @@
       const n = normalize(dx, dy);
       const mag = Math.min(42, n.d);
       this.nub.style.transform = `translate(${n.x * mag}px, ${n.y * mag}px)`;
+      this.stick.style.setProperty('--stick-x', `${n.x * mag}px`);
+      this.stick.style.setProperty('--stick-y', `${n.y * mag}px`);
     }
     pointerOrigin() {
       if (!this.pointerOriginProvider) return { x: this.pointer.ox || innerWidth / 2, y: this.pointer.oy || innerHeight / 2 };
@@ -775,7 +825,7 @@
       return old;
     }
     cellIndex(cx, cy) { return cy * this.w + cx; }
-    paintCircle(x, y, radius, code, dt, powerScale = 1) {
+    paintCircle(x, y, radius, code, dt, powerScale = 1, convertedSamples = null, sampleLimit = 5) {
       if (!code) return 0;
       const minX = clamp(Math.floor((x - radius) / this.cellW), 0, this.w - 1);
       const maxX = clamp(Math.floor((x + radius) / this.cellW), 0, this.w - 1);
@@ -801,6 +851,9 @@
             const strength = old === 0
               ? 78 + falloff * 94 * powerScale
               : (centerClaim ? 112 + falloff * 92 * powerScale : 76 + falloff * 76 * powerScale);
+            if (old && convertedSamples && convertedSamples.length < sampleLimit) {
+              convertedSamples.push({ x: wx, y: wy, oldCode: old, oldColor: rgbToHex(this.palette[old] || this.palette[0]) });
+            }
             this.setOwner(i, code, clamp(strength, 72, centerClaim ? 235 : 188));
             gained++;
           }
@@ -869,16 +922,22 @@
         data[p + 3] = 255;
       } else {
         const edges = this.edgeCount(i, code);
+        const cx = i % this.w;
+        const leftEdge = cx === 0 || this.owner[i - 1] !== code;
+        const rightEdge = cx === this.w - 1 || this.owner[i + 1] !== code;
+        const topEdge = i < this.w || this.owner[i - this.w] !== code;
+        const bottomEdge = i >= this.size - this.w || this.owner[i + this.w] !== code;
         const wet = 0.68 + s * 0.32;
         const marble = grain * 8 + grain2 * 5;
-        const bodyShade = (4 - edges) * 2.5 - edges * 1.2;
-        const rim = edges ? 14 + edges * 4 : -2;
+        const bodyShade = edges ? -1.5 : 5.5;
+        const rim = edges ? edges * 3 + (topEdge ? 10 : 0) + (leftEdge ? 6 : 0) : -2;
+        const underside = (bottomEdge ? 8 : 0) + (rightEdge ? 5 : 0);
         const sparkle = this.detail[(i * 17 + 13) % this.size] > 220 ? 16 : 0;
         const deep = 1 - smoothstep(0.58, 1, s);
-        const gloss = smoothstep(0.62, 1, s) * (8 + Math.max(0, grain2) * 10);
-        data[p] = clamp(Math.round(lerp(18, c.r, wet) + marble + rim + sparkle + gloss - deep * 14 + bodyShade), 0, 255);
-        data[p + 1] = clamp(Math.round(lerp(20, c.g, wet) + marble + rim + sparkle + gloss * 0.82 - deep * 12 + bodyShade), 0, 255);
-        data[p + 2] = clamp(Math.round(lerp(33, c.b, wet) + marble * 0.6 + rim * 0.72 + sparkle * 0.6 + gloss * 0.45 - deep * 8 + bodyShade), 0, 255);
+        const gloss = smoothstep(0.62, 1, s) * (edges ? 7 : 4.5 + Math.max(0, grain2) * 5);
+        data[p] = clamp(Math.round(lerp(18, c.r, wet) + marble + rim + sparkle + gloss - underside - deep * 14 + bodyShade), 0, 255);
+        data[p + 1] = clamp(Math.round(lerp(20, c.g, wet) + marble + rim + sparkle + gloss * 0.82 - underside * 0.9 - deep * 12 + bodyShade), 0, 255);
+        data[p + 2] = clamp(Math.round(lerp(33, c.b, wet) + marble * 0.6 + rim * 0.72 + sparkle * 0.6 + gloss * 0.45 - underside * 0.62 - deep * 8 + bodyShade), 0, 255);
         data[p + 3] = 255;
       }
     }
@@ -1475,11 +1534,13 @@
       this.winner = null;
       this.roundOverTimer = 0;
       this.centerBanner = null;
+      this.roundFlash = null;
       this.particles = [];
       this.floaters = [];
       this.shockwaves = [];
       this.ripples = [];
       this.camera = { x: CONFIG.WORLD_W / 2, y: CONFIG.WORLD_H / 2, zoom: 1 };
+      this.cameraPulse = 0;
       this.view = null;
       this.quality = localStorage.getItem('paintRush.quality') || 'auto';
       this.pixelRatio = 1;
@@ -1982,6 +2043,9 @@
       this.particles = [];
       this.floaters = [];
       this.shockwaves = [];
+      this.ripples = [];
+      this.roundFlash = null;
+      this.cameraPulse = 0;
       this.paint.clear(false);
     }
     startRound() {
@@ -1997,6 +2061,8 @@
       this.roundOverTimer = 0;
       this.winner = null;
       this.centerBanner = null;
+      this.roundFlash = null;
+      this.cameraPulse = 0;
       this.hideRoomLobbyOverlay();
       let i = 0;
       for (const p of this.players.values()) {
@@ -2063,7 +2129,7 @@
         input: { x: 0, y: 0, boost: false }, isBot, score: 0, combo: 0,
         lastPaintX: 0, lastPaintY: 0, noInputTimer: 0, lastBumpAt: 0,
         wobble: 0, wobbleV: 0, squash: 0, stretch: 0, impactSquash: 0,
-        boostPulse: 0, lastSpeed: 0, hitFlash: 0,
+        impactX: 0, impactY: 0, impactLife: 0, boostPulse: 0, lastSpeed: 0, hitFlash: 0, roundEndFade: 0,
         blob: null, blobAura: 0, facing: 0
       };
     }
@@ -2080,6 +2146,7 @@
       p.lastPaintX = p.x;
       p.lastPaintY = p.y;
       p.wobble = p.wobbleV = p.squash = p.stretch = p.impactSquash = p.boostPulse = p.lastSpeed = p.hitFlash = 0;
+      p.impactX = p.impactY = p.impactLife = p.roundEndFade = 0;
       p.blob = null;
       p.blobAura = 0;
       p.facing = 0;
@@ -2279,6 +2346,9 @@
       if (becameRoundOver && this.winner) {
         this.showRoundBanner(this.winner);
         this.juice.roundEnd();
+        for (const p of this.players.values()) {
+          if (p.code !== this.winner.code && p.name !== this.winner.name) p.roundEndFade = 1;
+        }
       } else if (!this.roundActive && !this.roundOver && this.mode !== 'menu') {
         this.showWaitingBanner();
       }
@@ -2315,6 +2385,7 @@
         this.shockwave(x, y, event.killerColor || event.color || p.color, 92);
         const own = event.victim === this.myId || event.killer === this.myId;
         this.juice.splat(own ? 1 : 0.65, event.victim === this.myId);
+        this.cameraPulse = Math.max(this.cameraPulse, own ? 1 : 0.72);
       }
     }
 
@@ -2323,9 +2394,14 @@
       this.lastTick = t;
       this.fps = lerp(this.fps, 1 / Math.max(0.001, rawDt), 0.04);
       this.juice.tick(rawDt);
+      this.cameraPulse = Math.max(0, this.cameraPulse - rawDt * 4);
       if (this.centerBanner) {
         this.centerBanner.life -= rawDt;
         if (this.centerBanner.life <= 0) this.centerBanner = null;
+      }
+      if (this.roundFlash) {
+        this.roundFlash.life -= rawDt;
+        if (this.roundFlash.life <= 0) this.roundFlash = null;
       }
 
       if (this.mode !== 'menu') {
@@ -2499,6 +2575,37 @@
     useLowFx() {
       return this.quality === 'low' || (this.quality === 'auto' && this.fps < 43);
     }
+    cosmeticBudget() {
+      if (this.quality === 'low') return 0;
+      if (this.quality === 'medium') return 1;
+      if (this.quality === 'high') return 2;
+      return this.fps < 48 ? 1 : 2;
+    }
+    spawnConversionFlecks(p, samples) {
+      const budget = this.cosmeticBudget();
+      if (!budget || !Array.isArray(samples) || !samples.length) return;
+      const cap = budget === 1 ? CONFIG.CONVERT_FLECK_CAP_MEDIUM : CONFIG.CONVERT_FLECK_CAP_HIGH;
+      const count = Math.min(cap, samples.length);
+      const speed = Math.hypot(p.vx || 0, p.vy || 0);
+      const bx = speed > 12 ? -p.vx / speed : rand(-1, 1);
+      const by = speed > 12 ? -p.vy / speed : rand(-1, 1);
+      for (let i = 0; i < count; i++) {
+        const s = samples[(Math.random() * samples.length) | 0];
+        const side = rand(-1, 1);
+        const push = rand(36, 96);
+        this.addParticle(
+          s.x + rand(-7, 7),
+          s.y + rand(-7, 7),
+          bx * push + side * by * 38 + rand(-18, 18),
+          by * push - side * bx * 38 + rand(-18, 18),
+          s.oldColor || p.color,
+          rand(0.28, 0.48),
+          rand(3, 7),
+          0.88,
+          { shape: 'droplet', stretch: rand(1.3, 2.1), glow: 0.1, gravity: 36, fromColor: s.oldColor || p.color, toColor: p.color, colorMixLife: 0.34 }
+        );
+      }
+    }
     ensureBlobMesh(p) {
       const targetCount = this.useLowFx() ? 8 : this.quality === 'medium' ? 10 : 12;
       if (Array.isArray(p.blob) && p.blob.length === targetCount) return;
@@ -2514,17 +2621,20 @@
       const speed = Math.hypot(p.vx, p.vy);
       if (speed > 4) p.facing = Math.atan2(p.vy, p.vx);
       const facing = p.facing || 0;
+      const impactAngle = Math.atan2(p.impactY || 0, p.impactX || 0);
+      const impactLife = p.impactLife || 0;
       const t = now() * 0.0016 + p.code * 0.43;
       for (const node of p.blob) {
         const diff = Math.cos(node.a - facing);
         const side = Math.sin(node.a - facing);
+        const impactSide = impactLife ? Math.max(0, Math.cos(node.a - impactAngle - Math.PI)) * impactLife * 0.24 : 0;
         const undulate = Math.sin(t * 2.6 + node.seed) * (CONFIG.BLOB_BREATH + (p.wobble || 0) * 0.045)
           + Math.sin(t * 3.7 - node.seed * 1.4 + node.a * 2) * (0.008 + (boosting ? 0.012 : 0.006));
         const frontStretch = Math.max(0, diff) * ((p.stretch || 0) * 0.46 + (boosting ? 0.04 : 0));
         const rearCompress = Math.max(0, -diff) * ((p.squash || 0) * 0.22 + (p.impactSquash || 0) * 0.2);
         const sidePlump = (1 - diff * diff) * ((p.squash || 0) * 0.08 + (p.wobble || 0) * 0.03);
         const impactKick = Math.max(0, Math.cos(node.a - facing - Math.PI)) * (p.impactSquash || 0) * 0.16;
-        const target = clamp(1 + undulate + frontStretch + sidePlump - rearCompress - impactKick + side * (p.wobble || 0) * 0.012, 0.76, 1.34);
+        const target = clamp(1 + undulate + frontStretch + sidePlump + impactSide - rearCompress - impactKick + side * (p.wobble || 0) * 0.012, 0.76, 1.38);
         node.v += (target - node.r) * CONFIG.BLOB_SPRING * dt;
         node.v *= Math.exp(-CONFIG.BLOB_DAMPING * dt);
         node.r = clamp(node.r + node.v * dt, 0.72, 1.38);
@@ -2556,6 +2666,8 @@
       p.squash = lerp(p.squash || 0, targetSquash, 1 - Math.exp(-CONFIG.JELLO_STIFFNESS * dt));
       p.stretch = lerp(p.stretch || 0, targetStretch, 1 - Math.exp(-CONFIG.JELLO_STIFFNESS * 0.65 * dt));
       p.impactSquash = Math.max(0, (p.impactSquash || 0) - dt * 2.6);
+      p.impactLife = Math.max(0, (p.impactLife || 0) - dt * 3.8);
+      p.roundEndFade = Math.max(0, (p.roundEndFade || 0) - dt * 2);
       p.boostPulse = boosting ? Math.min(1, (p.boostPulse || 0) + dt * 5) : Math.max(0, (p.boostPulse || 0) - dt * 4);
       const wobbleTarget = clamp((speedDelta / 320) + p.impactSquash * 1.2 + p.boostPulse * 0.08, 0, 0.7);
       p.wobbleV = (p.wobbleV || 0) + (wobbleTarget - (p.wobble || 0)) * CONFIG.JELLO_STIFFNESS * dt;
@@ -2569,11 +2681,15 @@
       const d = Math.hypot(x1 - x0, y1 - y0);
       const steps = clamp(Math.ceil(d / CONFIG.TRAIL_DEPOSIT_STEP), 1, 14);
       const stampDt = Math.max(dt / Math.min(steps, 3), 1 / 75);
+      const budget = this.cosmeticBudget();
+      const conversionSamples = budget ? [] : null;
+      const sampleLimit = budget === 1 ? CONFIG.CONVERT_FLECK_CAP_MEDIUM : CONFIG.CONVERT_FLECK_CAP_HIGH;
       let gained = 0;
       for (let i = 1; i <= steps; i++) {
         const t = i / steps;
-        gained += this.paint.paintCircle(lerp(x0, x1, t), lerp(y0, y1, t), radius, p.code, stampDt, powerScale);
+        gained += this.paint.paintCircle(lerp(x0, x1, t), lerp(y0, y1, t), radius, p.code, stampDt, powerScale, conversionSamples, sampleLimit);
       }
+      this.spawnConversionFlecks(p, conversionSamples);
       return gained;
     }
     resolveCollisions(dt) {
@@ -2594,9 +2710,9 @@
           if (!this.roundOver && impact > 24) {
             const aPower = this.splatPower(a);
             const bPower = this.splatPower(b);
-            if (impact > CONFIG.SPLAT_MIN_IMPACT && aPower > bPower * CONFIG.SPLAT_POWER_RATIO) this.splat(b, a, impact, aPower, bPower);
-            else if (impact > CONFIG.SPLAT_MIN_IMPACT && bPower > aPower * CONFIG.SPLAT_POWER_RATIO) this.splat(a, b, impact, bPower, aPower);
-            else this.bumpPlayers(a, b, impact);
+            if (impact > CONFIG.SPLAT_MIN_IMPACT && aPower > bPower * CONFIG.SPLAT_POWER_RATIO) this.splat(b, a, impact, aPower, bPower, nx, ny);
+            else if (impact > CONFIG.SPLAT_MIN_IMPACT && bPower > aPower * CONFIG.SPLAT_POWER_RATIO) this.splat(a, b, impact, bPower, aPower, -nx, -ny);
+            else this.bumpPlayers(a, b, impact, nx, ny);
           }
         }
       }
@@ -2604,24 +2720,28 @@
     splatPower(p) {
       return p.r * CONFIG.SPLAT_RADIUS_WEIGHT + Math.hypot(p.vx, p.vy) * CONFIG.SPLAT_SPEED_WEIGHT;
     }
-    bumpPlayers(a, b, impact = 0) {
+    bumpPlayers(a, b, impact = 0, nx = 0, ny = 0) {
       const t = now();
       if (t - Math.max(a.lastBumpAt || 0, b.lastBumpAt || 0) < CONFIG.BUMP_FEEDBACK_MS) return;
       a.lastBumpAt = b.lastBumpAt = t;
       const force = clamp(impact / 260, 0.35, 1.4);
       a.impactSquash = Math.min(0.32, (a.impactSquash || 0) + force * CONFIG.JELLO_IMPACT_SCALE * 10);
       b.impactSquash = Math.min(0.32, (b.impactSquash || 0) + force * CONFIG.JELLO_IMPACT_SCALE * 10);
+      a.impactX = -nx; a.impactY = -ny; a.impactLife = Math.max(a.impactLife || 0, 0.22);
+      b.impactX = nx; b.impactY = ny; b.impactLife = Math.max(b.impactLife || 0, 0.22);
       a.hitFlash = b.hitFlash = 0.35;
       this.burst((a.x + b.x) / 2, (a.y + b.y) / 2, impact % 2 ? a.color : b.color, 12, 0.55);
       if (a.id === this.myId || b.id === this.myId) this.juice.hit(force);
     }
-    splat(victim, killer, impact = 0, winnerPower = 0, loserPower = 0) {
+    splat(victim, killer, impact = 0, winnerPower = 0, loserPower = 0, nx = 0, ny = 0) {
       if (!victim.alive || victim.respawn > 0) return;
       victim.alive = false;
       victim.respawn = 1.9;
       victim.vx = victim.vy = 0;
       victim.impactSquash = 0.42;
+      victim.impactX = nx; victim.impactY = ny; victim.impactLife = 0.32;
       killer.impactSquash = Math.min(0.36, (killer.impactSquash || 0) + 0.24);
+      killer.impactX = -nx; killer.impactY = -ny; killer.impactLife = Math.max(killer.impactLife || 0, 0.22);
       killer.hitFlash = 0.42;
       killer.boost = Math.min(1, killer.boost + 0.38);
       this.paint.paintCircle(victim.x, victim.y, victim.r * 2.7, killer.code, 0.5, 2.8);
@@ -2631,6 +2751,7 @@
       const reason = winnerPower && loserPower ? ` ${Math.round(winnerPower - loserPower)} power` : '';
       this.floatText(victim.x, victim.y - victim.r, `${killer.name} splatted ${victim.name}!${reason}`, killer.color, 1.25);
       if (victim.id === this.myId || killer.id === this.myId) this.juice.splat(1, victim.id === this.myId);
+      this.cameraPulse = Math.max(this.cameraPulse, 1);
       this.broadcastEventSafe({ type: 'splat', victim: victim.id, killer: killer.id, x: victim.x, y: victim.y, color: victim.color, killerColor: killer.color, impact });
     }
     endRound() {
@@ -2643,7 +2764,10 @@
       if (this.winner) {
         this.showRoundBanner(this.winner);
         this.juice.roundEnd();
+        this.juice.flash = Math.max(this.juice.flash, 0.36);
+        for (const p of this.players.values()) if (p !== this.winner) p.roundEndFade = 1;
         this.burst(this.winner.x, this.winner.y, this.winner.color, 80, 2);
+        this.winnerConfetti(this.winner);
       }
       this.sendFullSnapshot();
       this.updateHostControls();
@@ -2660,6 +2784,27 @@
         life: 5.4,
         maxLife: 5.4
       };
+      this.roundFlash = { color: player?.color || '#ffd166', life: 0.7, maxLife: 0.7 };
+    }
+    winnerConfetti(winner) {
+      const budget = this.cosmeticBudget();
+      if (!budget || !winner) return;
+      const count = budget === 1 ? 22 : 38;
+      for (let i = 0; i < count; i++) {
+        const a = rand(-Math.PI, 0);
+        const s = rand(120, 420);
+        this.addParticle(
+          winner.x + rand(-winner.r, winner.r),
+          winner.y + rand(-winner.r, winner.r),
+          Math.cos(a) * s + rand(-80, 80),
+          Math.sin(a) * s - rand(60, 180),
+          pick(CONFIG.COLORS),
+          rand(0.65, 1.2),
+          rand(4, 11),
+          0.95,
+          { shape: Math.random() < 0.6 ? 'droplet' : 'dot', stretch: rand(1.1, 2.2), glow: 0.12, gravity: 130 }
+        );
+      }
     }
     closestEnemy(p) {
       let best = null, bestD = Infinity;
@@ -2712,19 +2857,25 @@
     }
 
     addInkRipple(x, y, color, radius = 24, life = 0.4) {
-      if (this.useLowFx()) return;
-      const cap = this.quality === 'medium' ? 42 : 72;
+      const budget = this.cosmeticBudget();
+      if (!budget) return;
+      const cap = budget === 1 ? CONFIG.RIPPLE_CAP_MEDIUM : CONFIG.RIPPLE_CAP_HIGH;
       if (this.ripples.length > cap) this.ripples.splice(0, this.ripples.length - cap);
       this.ripples.push({
         x, y, color, radius,
         life, maxLife: life,
         rot: rand(0, TAU),
         sx: rand(0.75, 1.35),
-        sy: rand(0.7, 1.25)
+        sy: rand(0.7, 1.25),
+        depthAlpha: rand(0.1, 0.18),
+        shineAlpha: rand(0.16, 0.28),
+        wobble: rand(0, TAU)
       });
     }
     addParticle(x, y, vx, vy, color, life = 0.5, size = 8, alpha = 1, options = null) {
-      if (this.useLowFx() && this.particles.length > 120) return;
+      const budget = this.cosmeticBudget();
+      const cap = budget === 0 ? 100 : budget === 1 ? 180 : 320;
+      if (this.particles.length > cap) return;
       this.particles.push({
         x, y, vx, vy, color, life, maxLife: life, size, alpha,
         shape: options?.shape || 'dot',
@@ -2733,7 +2884,10 @@
         rot: options?.rot ?? rand(0, TAU),
         glow: options?.glow || 0,
         gravity: options?.gravity ?? 80,
-        highlight: options?.highlight !== false
+        highlight: options?.highlight !== false,
+        fromColor: options?.fromColor || null,
+        toColor: options?.toColor || null,
+        colorMixLife: options?.colorMixLife || 0
       });
     }
     burst(x, y, color, count = 24, force = 1) {
@@ -2760,6 +2914,10 @@
       this.shockwaves.push({ x, y, color, radius, life: 0.42, maxLife: 0.42 });
     }
     tickParticles(dt) {
+      for (const p of this.players.values()) {
+        p.roundEndFade = Math.max(0, (p.roundEndFade || 0) - dt * 2);
+        p.impactLife = Math.max(0, (p.impactLife || 0) - dt * 3.8);
+      }
       for (const p of this.particles) {
         p.life -= dt;
         p.x += p.vx * dt;
@@ -2800,7 +2958,9 @@
       }
       const viewTarget = Math.min(w / dpr / 880, h / dpr / 560);
       const mobileBoost = innerWidth < 720 ? 0.82 : 1;
-      this.camera.zoom = clamp(viewTarget * mobileBoost, 0.42, 1.18) * dpr;
+      const boostZoom = target?.boostPulse ? lerp(1, CONFIG.CAMERA_BOOST_ZOOM, clamp(target.boostPulse, 0, 1)) : 1;
+      const splatZoom = this.cameraPulse ? lerp(1, CONFIG.CAMERA_SPLAT_ZOOM, clamp(this.cameraPulse, 0, 1)) : 1;
+      this.camera.zoom = clamp(viewTarget * mobileBoost * boostZoom * splatZoom, 0.42, 1.18) * dpr;
       const shake = (this.juice.shake + this.juice.boostShake) * dpr;
       const sx = shake ? rand(-shake, shake) : 0;
       const sy = shake ? rand(-shake, shake) : 0;
@@ -2825,6 +2985,15 @@
       ctx.fillRect(0, 0, w, h);
       if (this.juice.flash > 0) {
         ctx.fillStyle = `rgba(255,255,255,${this.juice.flash * 0.35})`;
+        ctx.fillRect(0, 0, w, h);
+      }
+      if (this.roundFlash) {
+        const a = clamp(this.roundFlash.life / this.roundFlash.maxLife, 0, 1);
+        const flash = ctx.createRadialGradient(w * 0.5, h * 0.46, Math.min(w, h) * 0.05, w * 0.5, h * 0.48, Math.max(w, h) * 0.58);
+        flash.addColorStop(0, rgba(this.roundFlash.color, 0.24 * a));
+        flash.addColorStop(0.42, rgba(this.roundFlash.color, 0.12 * a));
+        flash.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = flash;
         ctx.fillRect(0, 0, w, h);
       }
       if (this.mode === 'menu') this.drawMenuBackground(ctx, w, h);
@@ -2950,18 +3119,30 @@
       const t = now() * 0.001;
       const pulse = 1 + Math.sin(t * 5.2 + p.code) * ((p.wobble || 0) * 0.02 + 0.01);
       const aura = p.blobAura || 0;
+      const roundFade = p.roundEndFade || 0;
+      const shadowSpeed = clamp(speed / 520, 0, 1);
 
       ctx.save();
+      ctx.globalAlpha = 1 - roundFade * 0.18;
       ctx.fillStyle = 'rgba(0,0,0,0.24)';
       ctx.beginPath();
-      ctx.ellipse(p.x + 5, p.y + p.r * 0.8, p.r * (1.08 + aura * 0.24), p.r * 0.36, 0, 0, TAU);
+      ctx.ellipse(
+        p.x + 5,
+        p.y + p.r * 0.82,
+        p.r * (1.08 + aura * 0.24 + shadowSpeed * 0.18 + (p.impactSquash || 0) * 0.65),
+        p.r * (0.34 + shadowSpeed * 0.04),
+        0,
+        0,
+        TAU
+      );
       ctx.fill();
       ctx.restore();
 
       ctx.save();
+      ctx.globalAlpha = 1 - roundFade * 0.28;
       ctx.translate(p.x, p.y);
       ctx.rotate(angle);
-      ctx.scale(pulse, pulse);
+      ctx.scale(pulse * (1 + roundFade * 0.08), pulse * (1 - roundFade * 0.16));
 
       if (aura > 0.02) {
         ctx.save();
@@ -3011,13 +3192,17 @@
       ctx.beginPath();
       ctx.ellipse(p.r * 0.08, -p.r * 0.08, p.r * 0.16, p.r * 0.06, -0.2, 0, TAU);
       ctx.fill();
-      if (!this.useLowFx()) {
-        ctx.globalAlpha = 0.22;
+      const budget = this.cosmeticBudget();
+      if (budget) {
+        ctx.globalAlpha = 0.16 + budget * 0.04;
         ctx.lineWidth = Math.max(2, p.r * 0.08);
         ctx.strokeStyle = 'rgba(255,255,255,0.75)';
-        ctx.beginPath();
-        ctx.arc(-p.r * 0.04, -p.r * 0.06, p.r * 0.58, -2.55, -0.58);
-        ctx.stroke();
+        for (let i = 0; i < budget + 1; i++) {
+          const y = -p.r * (0.22 - i * 0.18);
+          ctx.beginPath();
+          ctx.ellipse(-p.r * (0.02 + i * 0.08), y, p.r * (0.58 - i * 0.1), p.r * (0.16 - i * 0.025), -0.22 - i * 0.16, -2.65, -0.42);
+          ctx.stroke();
+        }
       }
       ctx.restore();
 
@@ -3030,9 +3215,16 @@
 
       if (aura > 0.02) {
         ctx.save();
-        ctx.globalAlpha = 0.28 + aura * 0.24;
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 0.24 + aura * 0.36;
+        this.traceBlobPath(ctx, p, 1.05 + aura * 0.04);
+        ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+        ctx.lineWidth = Math.max(2, p.r * 0.08);
+        ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 0.18 + aura * 0.18;
         ctx.strokeStyle = rgba(p.color, 0.88);
-        ctx.lineWidth = Math.max(3, p.r * 0.12);
+        ctx.lineWidth = Math.max(2, p.r * 0.08);
         for (let i = 0; i < 3; i++) {
           const r = p.r * (1.12 + i * 0.14 + Math.sin(t * 7 + i) * 0.02);
           ctx.beginPath();
@@ -3058,22 +3250,47 @@
       ctx.restore();
     }
     drawInkRipples(ctx) {
-      if (!this.ripples.length || this.useLowFx()) return;
+      if (!this.ripples.length || !this.cosmeticBudget()) return;
       ctx.save();
+      ctx.globalCompositeOperation = 'multiply';
+      for (const r of this.ripples) {
+        const a = clamp(r.life / r.maxLife, 0, 1);
+        const grow = 1 + (1 - a) * 0.42;
+        ctx.globalAlpha = a * (r.depthAlpha || 0.13);
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.lineWidth = Math.max(1.5, r.radius * 0.09) * a;
+        ctx.save();
+        ctx.translate(r.x, r.y);
+        ctx.rotate(r.rot + Math.sin(now() * 0.004 + r.wobble) * 0.08);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r.radius * r.sx * grow, r.radius * r.sy * grow, 0, 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+      }
       ctx.globalCompositeOperation = 'screen';
       for (const r of this.ripples) {
         const a = clamp(r.life / r.maxLife, 0, 1);
         const grow = 1 + (1 - a) * 0.48;
-        ctx.globalAlpha = a * 0.22;
+        ctx.globalAlpha = a * (r.shineAlpha || 0.22);
         ctx.strokeStyle = rgba(r.color, 0.72);
         ctx.lineWidth = 2.2 * a;
         ctx.save();
         ctx.translate(r.x, r.y);
-        ctx.rotate(r.rot);
+        ctx.rotate(r.rot + Math.sin(now() * 0.004 + r.wobble) * 0.08);
         ctx.beginPath();
         ctx.ellipse(0, 0, r.radius * r.sx * grow, r.radius * r.sy * grow, 0, 0, TAU);
         ctx.stroke();
-        ctx.globalAlpha = a * 0.09;
+        const rr = r.radius * (0.5 + grow * 0.35);
+        const grad = ctx.createRadialGradient(0, 0, rr * 0.08, 0, 0, rr);
+        grad.addColorStop(0, 'rgba(255,255,255,0.18)');
+        grad.addColorStop(0.42, rgba(r.color, 0.2));
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.globalAlpha = a * 0.42;
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rr * r.sx, rr * r.sy, 0, 0, TAU);
+        ctx.fill();
+        ctx.globalAlpha = a * 0.08;
         ctx.fillStyle = rgba(r.color, 0.5);
         ctx.beginPath();
         ctx.ellipse(0, 0, r.radius * r.sx * (0.65 + grow * 0.25), r.radius * r.sy * (0.65 + grow * 0.25), 0, 0, TAU);
@@ -3087,12 +3304,14 @@
       for (const p of this.particles) {
         const a = p.life / p.maxLife;
         if (foreground !== (p.size > 9)) continue;
+        const mixT = p.fromColor && p.toColor ? clamp(1 - p.life / (p.colorMixLife || p.maxLife), 0, 1) : 0;
+        const displayColor = p.fromColor && p.toColor ? mixColor(p.fromColor, p.toColor, mixT) : p.color;
         ctx.globalAlpha = a * p.alpha;
         if (p.glow) {
-          ctx.shadowColor = rgba(p.color, 0.55);
+          ctx.shadowColor = alphaColor(displayColor, 0.55);
           ctx.shadowBlur = p.size * (0.9 + p.glow * 1.8);
         }
-        ctx.fillStyle = p.color;
+        ctx.fillStyle = displayColor;
         if (p.shape === 'droplet') {
           const ang = Math.atan2(p.vy || 0, p.vx || 0) + (p.rot || 0) * 0.12;
           const len = p.size * (p.stretch || 1.7) * (0.65 + (1 - a) * 0.65);
@@ -3216,7 +3435,8 @@
       const total = this.paint.size;
       $('leaderboard').innerHTML = rows.map((r, i) => {
         const pct = (r.score / total * 100).toFixed(1);
-        return `<div class="leader-row"><span class="swatch" style="background:${r.color};color:${r.color}"></span><span class="leader-name">${i + 1}. ${escapeHtml(r.name)}${r.me ? ' ★' : ''}${r.bot ? ' 🤖' : ''}</span><span class="leader-score">${pct}%</span></div>`;
+        const rowClass = r.me ? 'leader-row me' : 'leader-row';
+        return `<div class="${rowClass}" style="--leader-color:${r.color}"><span class="swatch" style="background:${r.color};color:${r.color}"></span><span class="leader-name">${i + 1}. ${escapeHtml(r.name)}${r.me ? ' *' : ''}${r.bot ? ' bot' : ''}</span><span class="leader-score">${pct}%</span></div>`;
       }).join('');
       this.updateRoomLobbyOverlay();
     }
