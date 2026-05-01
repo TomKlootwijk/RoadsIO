@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.6.2-feedback-polish',
+    VERSION: '0.6.3-regression-recovery',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_GAME_VERSION: 'roads-splash-io-v1',
@@ -46,9 +46,6 @@
     BOOST_DRAIN: 0.52,
     BOOST_REGEN: 0.08,
     BOOST_PAINT_REWARD: 0.00025,
-    STREAK_MAX: 135,
-    STREAK_TIER: 45,
-    STREAK_DECAY: 16,
     LOW_TIME_SECONDS: 10,
     LEAD_CHANGE_SHAKE: 2.2,
 
@@ -56,11 +53,11 @@
     CONVERT_POWER: 260,
     OVERPAINT_CENTER: 0.52,
     TRAIL_DEPOSIT_STEP: 6,
-    COLLISION_PUSH: 0.56,
-    COLLISION_BOUNCE: 0.16,
+    COLLISION_PUSH: 0,
+    COLLISION_BOUNCE: 0,
     REINFORCE_POWER: 260,
-    SPLAT_CONTACT_PADDING: 4,
-    SPLAT_MIN_IMPACT: 92,
+    SPLAT_CONTACT_PADDING: 0,
+    SPLAT_MIN_IMPACT: 105,
     SPLAT_POWER_RATIO: 1.12,
     SPLAT_RADIUS_WEIGHT: 4.8,
     SPLAT_SPEED_WEIGHT: 0.22,
@@ -464,19 +461,6 @@
       this.tone(882 + m * 220, 0.1, 'sine', 0.018 + m * 0.008, this.sfxGain, t + 0.04, { slide: 1.05, attack: 0.006 });
       this.noiseBurst(0.07, 0.009 + m * 0.006, 3600 + m * 900, 'highpass', this.sfxGain, t + 0.02, { q: 0.45 });
       this.flash = Math.max(this.flash, 0.045 + m * 0.055);
-    }
-    streak(amount = 1) {
-      if (!this.enabled) return;
-      this.unlock();
-      if (!this.ctx) return;
-      const t = this.ctx.currentTime;
-      const m = clamp(amount / CONFIG.STREAK_MAX, 0, 1);
-      this.tone(520 + m * 240, 0.07, 'triangle', 0.026 + m * 0.012, this.sfxGain, t, { slide: 1.32, attack: 0.004 });
-      this.tone(780 + m * 320, 0.08, 'sine', 0.018 + m * 0.01, this.sfxGain, t + 0.035, { slide: 1.16, attack: 0.004 });
-      this.noiseBurst(0.06, 0.012 + m * 0.01, 4200, 'highpass', this.sfxGain, t + 0.012, { q: 0.35 });
-      this.flash = Math.max(this.flash, 0.065 + m * 0.075);
-      this.shake = Math.max(this.shake, 2.5 + m * 3.5);
-      this.vibrate(m > 0.65 ? [12, 18, 12] : 12);
     }
     leadChange(own = false) {
       if (!this.enabled) return;
@@ -1166,48 +1150,34 @@
       this.tx = player.x;
       this.ty = player.y;
       this.rethink = 0;
-      this.personality = rand(0.25, 0.9);
-      // Keep bots closer to the calmer territory-first behaviour: they should
-      // pressure space, not hard tunnel the player every few seconds.
-      this.aggression = rand(0.04, 0.32);
-      this.wander = rand(0.25, 0.85);
+      this.personality = rand(0.2, 1);
+      this.aggression = rand(0.15, 0.78);
     }
     update(dt, game) {
       const p = this.player;
       this.rethink -= dt;
-      if (this.rethink <= 0 || dist2(p.x, p.y, this.tx, this.ty) < 85 * 85) {
-        this.rethink = rand(0.75, 1.65);
+      if (this.rethink <= 0 || dist2(p.x, p.y, this.tx, this.ty) < 90 * 90) {
+        this.rethink = rand(0.45, 1.2);
         const enemy = game.closestEnemy(p);
-        const enemyDist2 = enemy ? dist2(p.x, p.y, enemy.x, enemy.y) : Infinity;
-        const clearlyFavored = enemy && p.r > enemy.r * 1.18;
-        const shouldHunt = clearlyFavored
-          && enemyDist2 < 300 * 300
-          && Math.random() < this.aggression * 0.45;
+        const shouldHunt = enemy && Math.random() < this.aggression && p.r > enemy.r * 0.92 && dist2(p.x, p.y, enemy.x, enemy.y) < 420 * 420;
         if (shouldHunt) {
-          // Aim near, not directly through, enemies so bot pressure feels less
-          // like a homing missile while preserving the same splat rules.
-          const side = rand(-1, 1);
-          const dx = enemy.x - p.x, dy = enemy.y - p.y;
-          const n = normalize(dx, dy);
-          this.tx = enemy.x - n.x * rand(45, 90) - n.y * side * rand(35, 90);
-          this.ty = enemy.y - n.y * rand(45, 90) + n.x * side * rand(35, 90);
+          this.tx = enemy.x + rand(-60, 60);
+          this.ty = enemy.y + rand(-60, 60);
         } else {
           const target = game.findPaintTarget(p.code, p.x, p.y, this.personality);
-          this.tx = target.x + rand(-45, 45) * this.wander;
-          this.ty = target.y + rand(-45, 45) * this.wander;
+          this.tx = target.x;
+          this.ty = target.y;
         }
       }
 
       const avoid = game.closestThreat(p);
       let ax = this.tx - p.x, ay = this.ty - p.y;
-      if (avoid && dist2(p.x, p.y, avoid.x, avoid.y) < 230 * 230 && avoid.r > p.r * 1.04) {
-        ax += (p.x - avoid.x) * 3.1;
-        ay += (p.y - avoid.y) * 3.1;
+      if (avoid && dist2(p.x, p.y, avoid.x, avoid.y) < 190 * 190 && avoid.r > p.r * 1.05) {
+        ax += (p.x - avoid.x) * 2.4;
+        ay += (p.y - avoid.y) * 2.4;
       }
       const n = normalize(ax, ay);
-      const farFromGoal = dist2(p.x, p.y, this.tx, this.ty) > 260 * 260;
-      const escaping = avoid && avoid.r > p.r * 1.04 && dist2(p.x, p.y, avoid.x, avoid.y) < 210 * 210;
-      const boost = p.boost > 0.52 && (escaping || (farFromGoal && Math.random() < 0.18));
+      const boost = p.boost > 0.35 && (this.aggression > 0.52 || (avoid && avoid.r > p.r));
       return { x: n.x, y: n.y, boost };
     }
   }
@@ -1750,7 +1720,6 @@
       this.lastLeaderCode = 0;
       this.lastLeadAnnounceAt = 0;
       this.lastCountdownSecond = null;
-      this.lastStreakText = '';
       this.lastLowTimeClass = false;
       this.reducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
       this.saveData = !!(navigator.connection && navigator.connection.saveData);
@@ -1783,13 +1752,6 @@
       requestAnimationFrame((t) => this.loop(t));
     }
     setupUi() {
-      if (!$('streakBadge')) {
-        const badge = document.createElement('div');
-        badge.id = 'streakBadge';
-        badge.className = 'streak-badge hidden';
-        badge.innerHTML = 'RUSH <strong>0</strong>';
-        $('hud')?.querySelector('.hud-left')?.appendChild(badge);
-      }
       if (!$('startRoundBtn')) {
         const btn = document.createElement('button');
         btn.id = 'startRoundBtn';
@@ -2286,7 +2248,6 @@
       this.lastLeaderCode = 0;
       this.lastLeadAnnounceAt = 0;
       this.lastCountdownSecond = null;
-      this.lastStreakText = '';
       this.paint.clear(false);
     }
     startRound() {
@@ -2416,7 +2377,7 @@
       p.wobble = p.wobbleV = p.squash = p.stretch = p.impactSquash = p.boostPulse = p.lastSpeed = p.hitFlash = 0;
       p.impactX = p.impactY = p.impactLife = p.roundEndFade = 0;
       p.momentum = 0;
-      p.streak = Math.min(p.streak || 0, CONFIG.STREAK_TIER);
+      p.streak = 0;
       p.blob = null;
       p.blobAura = 0;
       p.facing = 0;
@@ -2524,7 +2485,7 @@
         alive: p.alive, respawn: Math.round(p.respawn * 100) / 100,
         isBot: p.isBot, score: this.paint.getCells(p.code),
         boosting: !!(p.input?.boost && p.boost > 0.05),
-        streak: Math.round(p.streak || 0), splatStreak: p.splatStreak || 0
+        streak: 0, splatStreak: p.splatStreak || 0
       }));
       return {
         type: 'snapshot',
@@ -2620,7 +2581,7 @@
           p.r = sp.r; p.boost = sp.boost;
           p.alive = sp.alive; p.respawn = sp.respawn; p.isBot = sp.isBot; p.score = sp.score || 0;
           if (!p.alive) p.trail = [];
-          p.streak = Number.isFinite(Number(sp.streak)) ? Number(sp.streak) : Math.max(0, (p.streak || 0) * 0.94);
+          p.streak = 0;
           p.splatStreak = sp.splatStreak || 0;
           p.input = { ...(p.input || { x: 0, y: 0, boost: false }), boost: !!sp.boosting };
         }
@@ -2721,7 +2682,10 @@
       } else {
         this.juice.boost(false);
       }
-      const paintBudget = this.quality === 'low' ? 12000 : this.quality === 'medium' ? 26000 : 52000;
+      const paintBudget = this.quality === 'low' ? 7000
+        : this.quality === 'medium' ? 16000
+          : this.quality === 'high' ? 42000
+            : (this.isMobileFx() || this.fps < 54 ? 9000 : 24000);
       this.paint.updateCanvas(paintBudget);
       this.render(rawDt);
       this.updateHud();
@@ -2879,8 +2843,7 @@
         p.vy = p.vy / speed * max;
       }
       p.momentum = lerp(p.momentum || 0, clamp(speed / Math.max(1, max), 0, 1), 1 - Math.exp(-6 * dt));
-      const streakDrain = CONFIG.STREAK_DECAY + (inputMag < 0.05 ? 18 : 0) + (this.roundActive ? 0 : 30);
-      p.streak = Math.max(0, (p.streak || 0) - streakDrain * dt);
+      p.streak = 0;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       let wallHit = 0;
@@ -2911,21 +2874,6 @@
       if (gained > 0) {
         p.boost = Math.min(1, p.boost + gained * CONFIG.BOOST_PAINT_REWARD);
         p.combo += gained;
-        const beforeStreak = p.streak || 0;
-        p.streak = clamp(beforeStreak + gained * (wantsBoost ? 0.86 : 0.62), 0, CONFIG.STREAK_MAX);
-        const tier = Math.floor(p.streak / CONFIG.STREAK_TIER);
-        const prevTier = Math.floor(beforeStreak / CONFIG.STREAK_TIER);
-        if (p.id === this.myId && tier > prevTier && now() - (p.lastStreakPopAt || 0) > 550) {
-          p.lastStreakPopAt = now();
-          const labels = ['RUSH', 'SPLASH RUSH', 'MEGA SPLASH'];
-          const label = labels[Math.min(labels.length - 1, tier - 1)] || 'RUSH';
-          this.floatText(p.x, p.y - p.r - 28, label, p.color, 1 + tier * 0.08);
-          this.juice.streak(p.streak);
-          if (!this.useLowFx()) {
-            this.shockwave(p.x, p.y, p.color, p.r * (1.9 + tier * 0.18));
-            this.sparkBurst(p.x, p.y - p.r * 0.3, p.color, 6 + tier * 3, 0.55 + tier * 0.18);
-          }
-        }
         if (p.id === this.myId && p.combo > 28) {
           this.floatText(p.x, p.y - p.r - 18, `+${p.combo}`, p.color);
           this.juice.combo(p.combo);
@@ -2933,31 +2881,22 @@
           p.combo = 0;
         }
       }
-      if (wantsBoost && speed > 145 && !this.useLowFx() && Math.random() < (this.useMediumFx() ? 0.16 : 0.28)) {
-        this.speedLine(
-          p.x - p.vx * rand(0.045, 0.075) + rand(-p.r * 0.22, p.r * 0.22),
-          p.y - p.vy * rand(0.045, 0.075) + rand(-p.r * 0.22, p.r * 0.22),
-          p.vx,
-          p.vy,
-          p.color,
-          rand(2.2, 5.6),
-          rand(0.16, 0.26)
-        );
-      }
       const movedPaint = Math.hypot(p.x - p.lastPaintX, p.y - p.lastPaintY);
       if (movedPaint > 32 && speed > 40) {
-        const droplet = wantsBoost || Math.random() < 0.42;
-        this.addParticle(
-          p.x - p.vx * 0.03,
-          p.y - p.vy * 0.03,
-          -p.vx * rand(0.07, 0.11) + rand(-22, 22),
-          -p.vy * rand(0.07, 0.11) + rand(-22, 22),
-          p.color,
-          rand(0.22, 0.48),
-          rand(3, p.r * 0.24),
-          0.9,
-          droplet ? { shape: 'droplet', stretch: rand(1.35, 2.4), glow: 0.2 } : { shape: 'dot', glow: 0.08 }
-        );
+        if (!this.useLowFx() || Math.random() < 0.18) {
+          const droplet = wantsBoost || Math.random() < 0.34;
+          this.addParticle(
+            p.x - p.vx * 0.03,
+            p.y - p.vy * 0.03,
+            -p.vx * rand(0.06, 0.1) + rand(-18, 18),
+            -p.vy * rand(0.06, 0.1) + rand(-18, 18),
+            p.color,
+            rand(0.18, 0.38),
+            rand(2.5, p.r * 0.18),
+            0.78,
+            droplet ? { shape: 'droplet', stretch: rand(1.2, 2), glow: 0.08 } : { shape: 'dot', glow: 0 }
+          );
+        }
         if (gained > 0 && !this.useLowFx()) {
           this.addInkRipple(p.x, p.y, p.color, p.r * rand(0.92, wantsBoost ? 1.45 : 1.18), wantsBoost ? 0.52 : 0.38);
           if (wantsBoost || gained > 12) this.sparkBurst(p.x, p.y, p.color, wantsBoost ? 3 : 2, wantsBoost ? 0.75 : 0.45);
@@ -2966,13 +2905,26 @@
       }
     }
     useLowFx() {
-      return this.quality === 'low' || this.reducedMotion || this.saveData || (this.quality === 'auto' && this.fps < 48);
+      return this.quality === 'low'
+        || this.reducedMotion
+        || this.saveData
+        || (this.quality === 'auto' && (this.isMobileFx() || this.fps < 54));
+    }
+    isMobileFx() {
+      const coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      return coarse || innerWidth < 720 || innerHeight < 520;
     }
     cosmeticBudget() {
       if (this.quality === 'low') return 0;
       if (this.quality === 'medium') return 1;
       if (this.quality === 'high') return 2;
-      return this.fps < 48 ? 1 : 2;
+      if (this.isMobileFx() || this.fps < 58) return 0;
+      return 1;
+    }
+    trailBudget() {
+      if (this.quality === 'high') return 10;
+      if (this.quality === 'medium') return 7;
+      return this.isMobileFx() || this.useLowFx() ? 5 : 8;
     }
     spawnConversionFlecks(p, samples) {
       const budget = this.cosmeticBudget();
@@ -3071,15 +3023,16 @@
       p.lastSpeed = speed;
     }
     updateMotionTrail(p, dt, boosting = false, speed = 0) {
-      if (!p || !p.alive || this.useLowFx()) {
+      if (!p || !p.alive) {
         if (p) p.trail = [];
         return;
       }
       if (!Array.isArray(p.trail)) p.trail = [];
       const t = this.frameNow || now();
-      const maxAge = boosting ? 560 : 380;
+      const lowTrail = this.useLowFx();
+      const maxAge = lowTrail ? (boosting ? 360 : 240) : (boosting ? 500 : 340);
       while (p.trail.length && t - p.trail[0].t > Math.max(maxAge, p.trail[0].life || maxAge)) p.trail.shift();
-      const minDist = boosting ? 6 : 10;
+      const minDist = lowTrail ? (boosting ? 12 : 18) : (boosting ? 8 : 12);
       const last = p.trail[p.trail.length - 1];
       if (!last || dist2(p.x, p.y, last.x, last.y) >= minDist * minDist) {
         p.trail.push({
@@ -3087,12 +3040,12 @@
           y: p.y,
           r: p.r,
           t,
-          life: boosting ? 520 : 340,
+          life: maxAge,
           boost: boosting ? 1 : 0,
           speed: clamp(speed / 460, 0, 1)
         });
       }
-      const cap = this.useMediumFx() ? 9 : 14;
+      const cap = this.trailBudget();
       if (p.trail.length > cap) p.trail.splice(0, p.trail.length - cap);
     }
 
@@ -3120,8 +3073,7 @@
           const dx = b.x - a.x, dy = b.y - a.y;
           const d = Math.hypot(dx, dy) || 1;
           const min = a.r + b.r;
-          const padding = CONFIG.SPLAT_CONTACT_PADDING || 0;
-          if (d >= min + padding) continue;
+          if (d >= min) continue;
           const nx = dx / d, ny = dy / d;
           const av = a.vx * nx + a.vy * ny;
           const bv = b.vx * nx + b.vy * ny;
@@ -3138,8 +3090,8 @@
           }
 
           const overlap = Math.max(0, min - d);
-          if (overlap > 0) {
-            const push = Math.min(16, overlap * CONFIG.COLLISION_PUSH + 0.35);
+          if (overlap > 0 && (CONFIG.COLLISION_PUSH > 0 || CONFIG.COLLISION_BOUNCE > 0)) {
+            const push = Math.min(16, overlap * CONFIG.COLLISION_PUSH);
             a.x = clamp(a.x - nx * push, a.r, CONFIG.WORLD_W - a.r);
             a.y = clamp(a.y - ny * push, a.r, CONFIG.WORLD_H - a.r);
             b.x = clamp(b.x + nx * push, b.r, CONFIG.WORLD_W - b.r);
@@ -3183,7 +3135,7 @@
       const t = now();
       killer.splatStreak = (t - (killer.lastSplatAt || 0) < 6500 ? (killer.splatStreak || 0) : 0) + 1;
       killer.lastSplatAt = t;
-      killer.streak = clamp((killer.streak || 0) + 58, 0, CONFIG.STREAK_MAX);
+      killer.streak = 0;
       killer.impactSquash = Math.min(0.36, (killer.impactSquash || 0) + 0.24);
       killer.impactX = -nx; killer.impactY = -ny; killer.impactLife = Math.max(killer.impactLife || 0, 0.22);
       killer.hitFlash = 0.42;
@@ -3327,7 +3279,7 @@
     }
     addParticle(x, y, vx, vy, color, life = 0.5, size = 8, alpha = 1, options = null) {
       const budget = this.cosmeticBudget();
-      const cap = budget === 0 ? 120 : budget === 1 ? 220 : 340;
+      const cap = budget === 0 ? 70 : budget === 1 ? 130 : 220;
       if (this.particles.length >= cap) this.particles.splice(0, this.particles.length - cap + 1);
       this.particles.push({
         x, y, vx, vy, color, life, maxLife: life, size, alpha,
@@ -3344,7 +3296,7 @@
       });
     }
     burst(x, y, color, count = 24, force = 1) {
-      const cap = this.useLowFx() ? Math.min(count, 20) : this.useMediumFx() ? Math.min(count, 38) : count;
+      const cap = this.useLowFx() ? Math.min(count, 8) : this.useMediumFx() ? Math.min(count, 18) : Math.min(count, 34);
       for (let i = 0; i < cap; i++) {
         const a = rand(0, TAU), s = rand(80, 370) * force;
         const droplet = this.useLowFx() ? Math.random() < 0.35 : Math.random() < 0.68;
@@ -3367,8 +3319,8 @@
       this.shockwaves.push({ x, y, color, radius, life: 0.42, maxLife: 0.42 });
     }
     speedLine(x, y, vx, vy, color, width = 10, life = 0.28) {
-      if (this.useLowFx()) return;
-      const cap = this.useMediumFx() ? 18 : 34;
+      if (this.quality !== 'high' || this.isMobileFx() || this.useLowFx()) return;
+      const cap = 10;
       if (this.speedLines.length > cap) this.speedLines.splice(0, this.speedLines.length - cap);
       const speed = Math.hypot(vx, vy) || 1;
       this.speedLines.push({
@@ -3385,8 +3337,9 @@
       });
     }
     sparkBurst(x, y, color, count = 12, force = 1) {
-      if (this.useLowFx()) count = Math.min(count, 8);
-      else if (this.useMediumFx()) count = Math.min(count, 16);
+      if (this.useLowFx()) count = Math.min(count, 3);
+      else if (this.useMediumFx()) count = Math.min(count, 8);
+      else count = Math.min(count, 16);
       for (let i = 0; i < count; i++) {
         const a = rand(0, TAU);
         const s = rand(120, 420) * force;
@@ -3399,7 +3352,7 @@
       }
     }
     launchConfetti(color = '#ffd166') {
-      const count = this.useLowFx() ? 34 : this.useMediumFx() ? 58 : 88;
+      const count = this.useLowFx() ? 0 : this.useMediumFx() ? 24 : 44;
       const palette = [color, '#ffd166', '#2ee6b8', '#4bb3ff', '#ff5c8a', '#ffffff'];
       for (let i = 0; i < count; i++) {
         this.confetti.push({
@@ -3505,7 +3458,6 @@
       this.drawWorld(ctx);
       this.drawInkRipples(ctx);
       this.drawPlayerTrails(ctx);
-      this.drawSpeedLines(ctx);
       this.drawParticles(ctx, false);
       this.drawShockwaves(ctx);
       this.drawCombatHints(ctx);
@@ -3529,7 +3481,6 @@
         ctx.fillRect(0, 0, w, h);
       }
       if (this.mode === 'menu') this.drawMenuBackground(ctx, w, h);
-      this.drawScreenRush(ctx, w, h, dpr, target);
       this.drawThreatArrows(ctx, w, h, dpr, target);
       this.drawScreenConfetti(ctx, w, h, dpr);
       this.drawCenterBanner(ctx, w, h, dpr);
@@ -3708,18 +3659,18 @@
       ctx.restore();
     }
     drawPlayerTrails(ctx) {
-      if (this.useLowFx()) return;
       const t = this.frameNow || now();
+      const lowFx = this.useLowFx();
       const mediumFx = this.useMediumFx();
       ctx.save();
-      ctx.globalCompositeOperation = 'screen';
+      ctx.globalCompositeOperation = lowFx ? 'source-over' : 'screen';
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       for (const p of this.players.values()) {
         const trail = p.trail;
         if (!p.alive || !Array.isArray(trail) || trail.length < 2) continue;
         if (!this.isWorldVisible(p.x, p.y, (p.r || CONFIG.BASE_RADIUS) + 130)) continue;
-        const maxSegments = mediumFx ? 6 : 10;
+        const maxSegments = this.trailBudget();
         const start = Math.max(1, trail.length - maxSegments);
         for (let i = start; i < trail.length; i++) {
           const a = trail[i - 1];
@@ -3729,23 +3680,22 @@
           if (age > life) continue;
           const fade = clamp(1 - age / life, 0, 1);
           const order = i / Math.max(1, trail.length - 1);
-          const width = Math.max(2, (b.r || p.r) * (0.32 + b.speed * 0.28 + b.boost * 0.16) * fade * (0.5 + order * 0.5));
-          const midX = (a.x + b.x) * 0.5;
-          const midY = (a.y + b.y) * 0.5;
-          ctx.globalAlpha = fade * (0.13 + b.boost * 0.06);
-          ctx.strokeStyle = rgba(p.color, 0.72);
+          const widthScale = lowFx ? 0.24 : 0.32 + b.speed * 0.22 + b.boost * 0.12;
+          const width = Math.max(2, (b.r || p.r) * widthScale * fade * (0.5 + order * 0.5));
+          ctx.globalAlpha = fade * (lowFx ? 0.12 : 0.13 + b.boost * 0.05);
+          ctx.strokeStyle = rgba(p.color, lowFx ? 0.58 : 0.72);
           ctx.lineWidth = width;
           ctx.beginPath();
           ctx.moveTo(a.x, a.y);
-          ctx.quadraticCurveTo(midX, midY, b.x, b.y);
+          ctx.lineTo(b.x, b.y);
           ctx.stroke();
-          if (!mediumFx && b.boost) {
-            ctx.globalAlpha = fade * 0.1;
+          if (!lowFx && !mediumFx && b.boost) {
+            ctx.globalAlpha = fade * 0.08;
             ctx.strokeStyle = 'rgba(255,255,255,0.9)';
             ctx.lineWidth = Math.max(1, width * 0.28);
             ctx.beginPath();
             ctx.moveTo(a.x, a.y);
-            ctx.quadraticCurveTo(midX, midY, b.x, b.y);
+            ctx.lineTo(b.x, b.y);
             ctx.stroke();
           }
         }
@@ -3856,8 +3806,7 @@
       const pulse = 1 + Math.sin(t * 5.2 + p.code) * ((p.wobble || 0) * 0.02 + 0.01);
       const roundFade = p.roundEndFade || 0;
       const shadowSpeed = clamp(speed / 520, 0, 1);
-      const streakJuice = clamp((p.streak || 0) / CONFIG.STREAK_MAX, 0, 1);
-      const aura = Math.max(p.blobAura || 0, streakJuice * 0.58);
+      const aura = p.blobAura || 0;
       const speedJuice = clamp(speed / 440, 0, 1);
 
       if (p.id === this.myId) {
@@ -4213,26 +4162,6 @@
       }
       ctx.restore();
     }
-    drawScreenRush(ctx, w, h, dpr, target) {
-      if (!target || !target.alive || this.useLowFx()) return;
-      const speed = Math.hypot(target.vx || 0, target.vy || 0);
-      const streak = clamp((target.streak || 0) / CONFIG.STREAK_MAX, 0, 1);
-      const lowTime = this.roundActive && !this.roundOver && this.matchTime <= CONFIG.LOW_TIME_SECONDS ? 0.12 : 0;
-      const rush = clamp((speed - 220) / 520 + streak * 0.26 + lowTime, 0, 1);
-      if (rush <= 0.18) return;
-      // Keep high-speed feedback out of the playfield center. The old screen
-      // streaks read as a rigid striped box; the real trail now follows the
-      // player in world space via drawPlayerTrails().
-      const cx = w * 0.5, cy = h * 0.5;
-      const vignette = ctx.createRadialGradient(cx, cy, Math.min(w, h) * 0.28, cx, cy, Math.max(w, h) * 0.72);
-      vignette.addColorStop(0, 'rgba(255,255,255,0)');
-      vignette.addColorStop(1, rgba(target.color || '#ffffff', 0.025 + rush * 0.035));
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      ctx.fillStyle = vignette;
-      ctx.fillRect(0, 0, w, h);
-      ctx.restore();
-    }
     drawThreatArrows(ctx, w, h, dpr, target) {
       if (!target || !target.alive || this.useLowFx() || !this.view) return;
       const me = target;
@@ -4385,19 +4314,6 @@
         $('boostFill').parentElement.classList.toggle('boosting', boosting);
         this.lastBoosting = boosting;
       }
-      const streakValue = Math.round(me?.streak || 0);
-      const streakText = streakValue >= 18 ? `${streakValue}` : '';
-      if (force || streakText !== this.lastStreakText) {
-        const badge = $('streakBadge');
-        if (badge) {
-          badge.classList.toggle('hidden', !streakText);
-          const strong = badge.querySelector('strong');
-          if (strong) strong.textContent = streakText || '0';
-          badge.classList.toggle('hot', streakValue >= CONFIG.STREAK_TIER * 2);
-        }
-        this.lastStreakText = streakText;
-      }
-
       if (!force && t - this.lastHudAt < 120) {
         if (t - this.lastRoomOverlayAt > 300) {
           this.lastRoomOverlayAt = t;

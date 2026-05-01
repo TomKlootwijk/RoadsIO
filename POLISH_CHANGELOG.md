@@ -94,3 +94,17 @@ Scope: addressed recent playtest feedback while preserving the core paint/boost/
 
 - `node --check RoadsIO/src/game.js`
 - Browser smoke test was attempted, but this execution environment blocks Chromium navigation to both local HTTP and file URLs (`ERR_BLOCKED_BY_ADMINISTRATOR`).
+
+# Regression Recovery Pass
+
+Build: `0.6.3-regression-recovery`
+
+Scope: recover the stable pre-juice feel while preserving a cheap world-space player trail.
+
+## Changes
+
+- Fixed the mobile boost button cascade so the button stays bottom-right and the joystick remains untouched.
+- Removed visible Rush/Splash streak presentation and audio while keeping normal paint scoring, boost, splats, and round flow.
+- Restored the pre-juice bot brain values for more active hunting, painting, avoidance, and boost use.
+- Removed feedback-build collision push/bounce and restored the previous splat impact threshold.
+- Cut default mobile/auto cosmetic budgets, disabled screen rush/speed-line effects by default, and kept an optimized low-cost player trail.

@@ -641,3 +641,10 @@ select:focus-visible {
   transition: opacity 120ms ease;
 }
 .stick.dragging::after { opacity: 1; }
+
+/* 0.6.3 regression recovery: later button shine rules must not move touch controls. */
+.touch-controls .boost-btn {
+  position: absolute;
+  left: auto;
+  top: auto;
+}
