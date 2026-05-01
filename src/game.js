@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.6.0-ultra-juice-optimized',
+    VERSION: '0.6.1-ultra-juice-hotfix',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_GAME_VERSION: 'roads-splash-io-v1',
@@ -976,7 +976,7 @@
               ? 78 + falloff * 94 * powerScale
               : (centerClaim ? 112 + falloff * 92 * powerScale : 76 + falloff * 76 * powerScale);
             if (old && convertedSamples && convertedSamples.length < sampleLimit) {
-              convertedSamples.push({ x: wx, y: wy, oldCode: old, oldColor: rgbToHex(this.palette[old] || this.palette[0]) });
+              convertedSamples.push({ x: this.worldX[cx], y: this.worldY[cy], oldCode: old, oldColor: rgbToHex(this.palette[old] || this.palette[0]) });
             }
             this.setOwner(i, code, clamp(strength, 72, centerClaim ? 235 : 188));
             gained++;
