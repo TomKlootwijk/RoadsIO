@@ -22,10 +22,11 @@
 
 ### Juice and polish
 
-- Glossy paint ball rendering.
-- Squash/stretch based on speed.
-- Paint particles.
-- Splat bursts.
+- Jello/blob player rendering with springy perimeter motion.
+- Squash/stretch based on speed and impact.
+- Wet-look paint field shading with sheen and stronger edge definition.
+- Paint particles with droplet streaks.
+- Richer splat bursts and layered shockwaves.
 - Floating combo/winner text.
 - Screen shake and flash on impact.
 - Mini-map.
@@ -56,6 +57,7 @@
 - Existing signaling URL configured.
 - Render wake-up notification/modal.
 - RuneVale HTTP long-poll signaling support.
+- Conservative signaling hardening: no-store responses and long-poll waiter cleanup.
 - WebRTC DataChannel setup.
 - Host-authoritative simulation.
 - Client input packets.

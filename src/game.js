@@ -9,7 +9,7 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.18-stable-room-compat',
+    VERSION: '0.3.0-polish-jello',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
     SIGNALING_GAME_VERSION: 'roads-splash-io-v1',
@@ -54,6 +54,10 @@
     JELLO_DAMPING: 10.5,
     JELLO_SPEED_SQUASH: 0.22,
     JELLO_IMPACT_SCALE: 0.017,
+    BLOB_SPRING: 34,
+    BLOB_DAMPING: 9.5,
+    BLOB_BREATH: 0.014,
+    INK_WET_GAIN: 0.34,
     BOOST_SHAKE: 1.25,
     SPLAT_SHAKE: 22,
     OWN_SPLAT_SHAKE: 30,
@@ -82,6 +86,10 @@
   function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
   function lerp(a, b, t) { return a + (b - a) * t; }
   function invLerp(a, b, v) { return clamp((v - a) / (b - a), 0, 1); }
+  function smoothstep(a, b, v) {
+    const t = invLerp(a, b, v);
+    return t * t * (3 - 2 * t);
+  }
   function rand(min, max) { return min + Math.random() * (max - min); }
   function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
   function now() { return performance.now(); }
@@ -567,9 +575,12 @@
       this.netDirtyFlag = new Uint8Array(this.size);
       this.counts = new Map();
       this.detail = new Uint8Array(this.size);
+      this.detail2 = new Uint8Array(this.size);
       for (let i = 0; i < this.size; i++) {
         const n = Math.sin(i * 12.9898 + (i % this.w) * 78.233) * 43758.5453;
+        const m = Math.sin((i + 17) * 9.173 + (i % this.w) * 19.191) * 12515.873;
         this.detail[i] = Math.floor((n - Math.floor(n)) * 255);
+        this.detail2[i] = Math.floor((m - Math.floor(m)) * 255);
       }
       this.canvas = document.createElement('canvas');
       this.canvas.width = this.w;
@@ -700,26 +711,40 @@
       this.dirty.splice(0, n);
       this.ctx.putImageData(this.imageData, 0, 0);
     }
+    edgeCount(i, code) {
+      let n = 0;
+      const cx = i % this.w;
+      if (cx > 0 && this.owner[i - 1] !== code) n++;
+      if (cx < this.w - 1 && this.owner[i + 1] !== code) n++;
+      if (i >= this.w && this.owner[i - this.w] !== code) n++;
+      if (i < this.size - this.w && this.owner[i + this.w] !== code) n++;
+      return n;
+    }
     writePixel(data, i) {
       const code = this.owner[i];
       const c = this.palette[code] || this.palette[0];
       const s = this.strength[i] / 255;
       const grain = (this.detail[i] - 128) / 128;
+      const grain2 = (this.detail2[i] - 128) / 128;
       const p = i * 4;
       if (code === 0) {
-        const shade = grain * 5;
-        data[p] = Math.round(23 + shade);
-        data[p + 1] = Math.round(27 + shade);
-        data[p + 2] = Math.round(48 + shade * 1.4);
+        const cloud = grain * 4 + grain2 * 2;
+        data[p] = clamp(Math.round(22 + cloud), 0, 255);
+        data[p + 1] = clamp(Math.round(26 + cloud), 0, 255);
+        data[p + 2] = clamp(Math.round(46 + cloud * 1.6), 0, 255);
         data[p + 3] = 255;
       } else {
-        const edge = this.isPaintEdge(i, code) ? 18 : 0;
-        const sheen = this.detail[(i * 17 + 13) % this.size] > 218 ? 13 : 0;
-        const shade = grain * 5 + edge + sheen;
-        const mix = 0.68 + s * 0.32;
-        data[p] = clamp(Math.round(lerp(20, c.r, mix) + shade), 0, 255);
-        data[p + 1] = clamp(Math.round(lerp(22, c.g, mix) + shade), 0, 255);
-        data[p + 2] = clamp(Math.round(lerp(38, c.b, mix) + shade * 0.65), 0, 255);
+        const edges = this.edgeCount(i, code);
+        const wet = 0.68 + s * 0.32;
+        const marble = grain * 8 + grain2 * 5;
+        const bodyShade = (4 - edges) * 2.5 - edges * 1.2;
+        const rim = edges ? 14 + edges * 4 : -2;
+        const sparkle = this.detail[(i * 17 + 13) % this.size] > 220 ? 16 : 0;
+        const deep = 1 - smoothstep(0.58, 1, s);
+        const gloss = smoothstep(0.62, 1, s) * (8 + Math.max(0, grain2) * 10);
+        data[p] = clamp(Math.round(lerp(18, c.r, wet) + marble + rim + sparkle + gloss - deep * 14 + bodyShade), 0, 255);
+        data[p + 1] = clamp(Math.round(lerp(20, c.g, wet) + marble + rim + sparkle + gloss * 0.82 - deep * 12 + bodyShade), 0, 255);
+        data[p + 2] = clamp(Math.round(lerp(33, c.b, wet) + marble * 0.6 + rim * 0.72 + sparkle * 0.6 + gloss * 0.45 - deep * 8 + bodyShade), 0, 255);
         data[p + 3] = 255;
       }
     }
@@ -1877,7 +1902,8 @@
         input: { x: 0, y: 0, boost: false }, isBot, score: 0, combo: 0,
         lastPaintX: 0, lastPaintY: 0, noInputTimer: 0, lastBumpAt: 0,
         wobble: 0, wobbleV: 0, squash: 0, stretch: 0, impactSquash: 0,
-        boostPulse: 0, lastSpeed: 0, hitFlash: 0
+        boostPulse: 0, lastSpeed: 0, hitFlash: 0,
+        blob: null, blobAura: 0, facing: 0
       };
     }
     spawnPlayer(p, index = 0) {
@@ -1893,6 +1919,9 @@
       p.lastPaintX = p.x;
       p.lastPaintY = p.y;
       p.wobble = p.wobbleV = p.squash = p.stretch = p.impactSquash = p.boostPulse = p.lastSpeed = p.hitFlash = 0;
+      p.blob = null;
+      p.blobAura = 0;
+      p.facing = 0;
     }
     addBotButton() {
       if (!this.isHost) return;
@@ -2290,9 +2319,69 @@
       }
       const movedPaint = Math.hypot(p.x - p.lastPaintX, p.y - p.lastPaintY);
       if (movedPaint > 32 && speed > 40) {
-        this.addParticle(p.x - p.vx * 0.03, p.y - p.vy * 0.03, -p.vx * 0.08 + rand(-20, 20), -p.vy * 0.08 + rand(-20, 20), p.color, rand(0.22, 0.45), rand(3, p.r * 0.25), 0.9);
+        const droplet = wantsBoost || Math.random() < 0.42;
+        this.addParticle(
+          p.x - p.vx * 0.03,
+          p.y - p.vy * 0.03,
+          -p.vx * rand(0.07, 0.11) + rand(-22, 22),
+          -p.vy * rand(0.07, 0.11) + rand(-22, 22),
+          p.color,
+          rand(0.22, 0.48),
+          rand(3, p.r * 0.24),
+          0.9,
+          droplet ? { shape: 'droplet', stretch: rand(1.35, 2.4), glow: 0.2 } : { shape: 'dot', glow: 0.08 }
+        );
         p.lastPaintX = p.x; p.lastPaintY = p.y;
       }
+    }
+    ensureBlobMesh(p) {
+      const targetCount = this.quality === 'low' ? 8 : this.quality === 'medium' ? 10 : 12;
+      if (Array.isArray(p.blob) && p.blob.length === targetCount) return;
+      p.blob = Array.from({ length: targetCount }, (_, i) => ({
+        a: i / targetCount * TAU,
+        r: 1,
+        v: 0,
+        seed: Math.random() * TAU
+      }));
+    }
+    updateBlobMesh(p, dt, boosting) {
+      this.ensureBlobMesh(p);
+      const speed = Math.hypot(p.vx, p.vy);
+      if (speed > 4) p.facing = Math.atan2(p.vy, p.vx);
+      const facing = p.facing || 0;
+      const t = now() * 0.0016 + p.code * 0.43;
+      for (const node of p.blob) {
+        const diff = Math.cos(node.a - facing);
+        const side = Math.sin(node.a - facing);
+        const undulate = Math.sin(t * 2.6 + node.seed) * (CONFIG.BLOB_BREATH + (p.wobble || 0) * 0.045)
+          + Math.sin(t * 3.7 - node.seed * 1.4 + node.a * 2) * (0.008 + (boosting ? 0.012 : 0.006));
+        const frontStretch = Math.max(0, diff) * ((p.stretch || 0) * 0.46 + (boosting ? 0.04 : 0));
+        const rearCompress = Math.max(0, -diff) * ((p.squash || 0) * 0.22 + (p.impactSquash || 0) * 0.2);
+        const sidePlump = (1 - diff * diff) * ((p.squash || 0) * 0.08 + (p.wobble || 0) * 0.03);
+        const impactKick = Math.max(0, Math.cos(node.a - facing - Math.PI)) * (p.impactSquash || 0) * 0.16;
+        const target = clamp(1 + undulate + frontStretch + sidePlump - rearCompress - impactKick + side * (p.wobble || 0) * 0.012, 0.76, 1.34);
+        node.v += (target - node.r) * CONFIG.BLOB_SPRING * dt;
+        node.v *= Math.exp(-CONFIG.BLOB_DAMPING * dt);
+        node.r = clamp(node.r + node.v * dt, 0.72, 1.38);
+      }
+      p.blobAura = lerp(p.blobAura || 0, boosting ? 1 : 0, 1 - Math.exp(-7 * dt));
+    }
+    traceBlobPath(ctx, p, scale = 1) {
+      this.ensureBlobMesh(p);
+      const pts = p.blob.map(node => ({
+        x: Math.cos(node.a) * p.r * node.r * scale,
+        y: Math.sin(node.a) * p.r * node.r * scale
+      }));
+      const first = pts[0];
+      const last = pts[pts.length - 1];
+      ctx.beginPath();
+      ctx.moveTo((last.x + first.x) * 0.5, (last.y + first.y) * 0.5);
+      for (let i = 0; i < pts.length; i++) {
+        const cur = pts[i];
+        const next = pts[(i + 1) % pts.length];
+        ctx.quadraticCurveTo(cur.x, cur.y, (cur.x + next.x) * 0.5, (cur.y + next.y) * 0.5);
+      }
+      ctx.closePath();
     }
     updateJello(p, dt, boosting) {
       const speed = Math.hypot(p.vx, p.vy);
@@ -2308,6 +2397,7 @@
       p.wobbleV *= Math.exp(-CONFIG.JELLO_DAMPING * dt);
       p.wobble = clamp((p.wobble || 0) + p.wobbleV * dt, 0, 0.8);
       p.hitFlash = Math.max(0, (p.hitFlash || 0) - dt * 3.2);
+      this.updateBlobMesh(p, dt, boosting);
       p.lastSpeed = speed;
     }
     depositPaintTrail(p, x0, y0, x1, y1, radius, dt, powerScale) {
@@ -2456,15 +2546,34 @@
       }
     }
 
-    addParticle(x, y, vx, vy, color, life = 0.5, size = 8, alpha = 1) {
+    addParticle(x, y, vx, vy, color, life = 0.5, size = 8, alpha = 1, options = null) {
       if (this.quality === 'low' && this.particles.length > 120) return;
-      this.particles.push({ x, y, vx, vy, color, life, maxLife: life, size, alpha });
+      this.particles.push({
+        x, y, vx, vy, color, life, maxLife: life, size, alpha,
+        shape: options?.shape || 'dot',
+        stretch: options?.stretch || 1,
+        spin: options?.spin ?? rand(-6, 6),
+        rot: options?.rot ?? rand(0, TAU),
+        glow: options?.glow || 0,
+        gravity: options?.gravity ?? 80,
+        highlight: options?.highlight !== false
+      });
     }
     burst(x, y, color, count = 24, force = 1) {
       const cap = this.quality === 'low' ? Math.min(count, 22) : count;
       for (let i = 0; i < cap; i++) {
         const a = rand(0, TAU), s = rand(80, 370) * force;
-        this.addParticle(x, y, Math.cos(a) * s, Math.sin(a) * s, color, rand(0.35, 0.9), rand(4, 14), 1);
+        const droplet = this.quality === 'low' ? Math.random() < 0.35 : Math.random() < 0.68;
+        this.addParticle(
+          x, y,
+          Math.cos(a) * s,
+          Math.sin(a) * s,
+          color,
+          rand(0.35, 0.95),
+          rand(4, 14),
+          1,
+          droplet ? { shape: 'droplet', stretch: rand(1.25, 2.8), glow: 0.2 } : { shape: 'dot', glow: 0.12 }
+        );
       }
     }
     floatText(x, y, text, color, scale = 1) {
@@ -2480,7 +2589,8 @@
         p.y += p.vy * dt;
         p.vx *= Math.exp(-3.4 * dt);
         p.vy *= Math.exp(-3.4 * dt);
-        p.vy += 80 * dt;
+        p.vy += (p.gravity ?? 80) * dt;
+        p.rot += (p.spin || 0) * dt;
       }
       this.particles = this.particles.filter(p => p.life > 0);
       for (const f of this.floaters) { f.life -= dt; f.y += f.vy * dt; }
@@ -2524,6 +2634,11 @@
       this.drawFloaters(ctx);
 
       ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const overlay = ctx.createRadialGradient(w * 0.5, h * 0.46, Math.min(w, h) * 0.12, w * 0.5, h * 0.5, Math.max(w, h) * 0.65);
+      overlay.addColorStop(0, 'rgba(255,255,255,0)');
+      overlay.addColorStop(1, 'rgba(0,0,0,0.22)');
+      ctx.fillStyle = overlay;
+      ctx.fillRect(0, 0, w, h);
       if (this.juice.flash > 0) {
         ctx.fillStyle = `rgba(255,255,255,${this.juice.flash * 0.35})`;
         ctx.fillRect(0, 0, w, h);
@@ -2567,19 +2682,56 @@
     }
     drawWorld(ctx) {
       ctx.save();
-      ctx.fillStyle = '#171b30';
       ctx.shadowColor = 'rgba(0,0,0,0.4)';
       ctx.shadowBlur = 40;
       roundRect(ctx, -16, -16, CONFIG.WORLD_W + 32, CONFIG.WORLD_H + 32, 36);
+      ctx.fillStyle = '#171b30';
       ctx.fill();
       ctx.shadowBlur = 0;
+
+      roundRect(ctx, 0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H, 22);
+      ctx.save();
+      ctx.clip();
+
+      const bg = ctx.createLinearGradient(0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H);
+      bg.addColorStop(0, '#20264a');
+      bg.addColorStop(0.45, '#181d34');
+      bg.addColorStop(1, '#111424');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H);
+
+      ctx.globalAlpha = 0.28;
+      ctx.drawImage(this.paint.canvas, 4, 7, CONFIG.WORLD_W, CONFIG.WORLD_H);
+      ctx.globalAlpha = 1;
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(this.paint.canvas, 0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H);
-      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-      ctx.lineWidth = 5;
-      roundRect(ctx, 0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H, 22);
-      ctx.stroke();
-      // Subtle grid lines only on desktop/high enough zoom.
+
+      ctx.globalCompositeOperation = 'screen';
+      const shimmer = ctx.createLinearGradient(0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H);
+      shimmer.addColorStop(0, 'rgba(255,255,255,0.06)');
+      shimmer.addColorStop(0.25, 'rgba(255,255,255,0.015)');
+      shimmer.addColorStop(0.5, 'rgba(255,255,255,0.11)');
+      shimmer.addColorStop(0.75, 'rgba(255,255,255,0.02)');
+      shimmer.addColorStop(1, 'rgba(255,255,255,0.08)');
+      ctx.fillStyle = shimmer;
+      ctx.fillRect(0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H);
+
+      const glintX = (now() * 0.045) % (CONFIG.WORLD_W * 1.8) - CONFIG.WORLD_W * 0.45;
+      const glint = ctx.createLinearGradient(glintX, 0, glintX + CONFIG.WORLD_W * 0.32, CONFIG.WORLD_H);
+      glint.addColorStop(0, 'rgba(255,255,255,0)');
+      glint.addColorStop(0.45, 'rgba(255,255,255,0.065)');
+      glint.addColorStop(0.55, 'rgba(255,255,255,0.16)');
+      glint.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = glint;
+      ctx.fillRect(0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H);
+      ctx.globalCompositeOperation = 'source-over';
+
+      const vignette = ctx.createRadialGradient(CONFIG.WORLD_W * 0.5, CONFIG.WORLD_H * 0.46, CONFIG.WORLD_H * 0.12, CONFIG.WORLD_W * 0.5, CONFIG.WORLD_H * 0.5, CONFIG.WORLD_W * 0.72);
+      vignette.addColorStop(0, 'rgba(255,255,255,0.015)');
+      vignette.addColorStop(1, 'rgba(0,0,0,0.28)');
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H);
+
       if (this.camera.zoom > 0.68 && this.quality !== 'low') {
         ctx.beginPath();
         ctx.strokeStyle = 'rgba(255,255,255,0.035)';
@@ -2588,6 +2740,12 @@
         for (let y = 0; y <= CONFIG.WORLD_H; y += 140) { ctx.moveTo(0, y); ctx.lineTo(CONFIG.WORLD_W, y); }
         ctx.stroke();
       }
+      ctx.restore();
+
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 5;
+      roundRect(ctx, 0, 0, CONFIG.WORLD_W, CONFIG.WORLD_H, 22);
+      ctx.stroke();
       ctx.restore();
     }
     drawPlayer(ctx, p) {
@@ -2604,78 +2762,92 @@
         return;
       }
       const speed = Math.hypot(p.vx, p.vy);
-      const angle = speed > 10 ? Math.atan2(p.vy, p.vx) : 0;
-      const t = now() * 0.006;
-      const wobble = p.wobble || 0;
-      const squash = clamp((p.squash || 0) + Math.sin(t * 1.7 + p.code) * wobble * 0.03, 0, 0.46);
-      const stretch = clamp((p.stretch || 0) + (p.boostPulse || 0) * 0.08, 0, 0.38);
-      const pulse = 1 + Math.sin(t * 2.6 + p.code) * wobble * 0.04;
+      const angle = speed > 10 ? Math.atan2(p.vy, p.vx) : (p.facing || 0);
+      const t = now() * 0.001;
+      const pulse = 1 + Math.sin(t * 5.2 + p.code) * ((p.wobble || 0) * 0.02 + 0.01);
+      const aura = p.blobAura || 0;
+
       ctx.save();
-      ctx.fillStyle = 'rgba(0,0,0,0.27)';
+      ctx.fillStyle = 'rgba(0,0,0,0.24)';
       ctx.beginPath();
-      ctx.ellipse(p.x + 3, p.y + p.r * 0.72, p.r * (1.05 + stretch), p.r * 0.34, 0, 0, TAU);
+      ctx.ellipse(p.x + 5, p.y + p.r * 0.8, p.r * (1.08 + aura * 0.24), p.r * 0.36, 0, 0, TAU);
       ctx.fill();
+      ctx.restore();
+
+      ctx.save();
       ctx.translate(p.x, p.y);
       ctx.rotate(angle);
-      ctx.scale((1 + stretch + squash * 0.55) * pulse, Math.max(0.62, 1 - squash * 0.62));
+      ctx.scale(pulse, pulse);
 
-      if ((p.boostPulse || 0) > 0.02) {
+      if (aura > 0.02) {
         ctx.save();
-        ctx.globalAlpha = 0.22 + p.boostPulse * 0.28;
-        ctx.strokeStyle = rgba(p.color, 0.8);
-        ctx.lineWidth = Math.max(3, p.r * 0.16);
-        for (let i = 0; i < 3; i++) {
-          ctx.beginPath();
-          ctx.moveTo(-p.r * (1.1 + i * 0.25), (i - 1) * p.r * 0.28);
-          ctx.lineTo(-p.r * (2.1 + i * 0.3), (i - 1) * p.r * 0.36);
-          ctx.stroke();
-        }
+        this.traceBlobPath(ctx, p, 1.2 + aura * 0.06);
+        ctx.fillStyle = rgba(p.color, 0.1 + aura * 0.12);
+        ctx.shadowColor = rgba(p.color, 0.42 + aura * 0.18);
+        ctx.shadowBlur = 16 + aura * 16;
+        ctx.fill();
         ctx.restore();
       }
 
-      const grad = ctx.createRadialGradient(-p.r * 0.35, -p.r * 0.45, p.r * 0.15, 0, 0, p.r * 1.2);
-      grad.addColorStop(0, lighten(p.color, 0.58));
-      grad.addColorStop(0.45, p.color);
-      grad.addColorStop(1, darken(p.color, 0.38));
-      ctx.shadowColor = rgba(p.color, 0.35);
-      ctx.shadowBlur = 16 + p.boostPulse * 16;
+      ctx.save();
+      this.traceBlobPath(ctx, p, 1);
+      const grad = ctx.createRadialGradient(-p.r * 0.42, -p.r * 0.48, p.r * 0.1, 0, 0, p.r * 1.22);
+      grad.addColorStop(0, lighten(p.color, 0.72));
+      grad.addColorStop(0.22, lighten(p.color, 0.26));
+      grad.addColorStop(0.68, p.color);
+      grad.addColorStop(1, darken(p.color, 0.42));
       ctx.fillStyle = grad;
-      ctx.beginPath();
-      const points = 30;
-      for (let i = 0; i <= points; i++) {
-        const a = i / points * TAU;
-        const wave = Math.sin(a * 3 + t + p.code) * wobble * 0.08
-          + Math.sin(a * 2 - t * 0.8) * wobble * 0.04
-          + Math.cos(a - Math.PI) * (p.impactSquash || 0) * 0.08;
-        const rr = p.r * (1 + wave);
-        const x = Math.cos(a) * rr;
-        const y = Math.sin(a) * rr;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.closePath();
+      ctx.shadowColor = rgba(p.color, 0.34 + aura * 0.18);
+      ctx.shadowBlur = 14 + aura * 12;
       ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = (p.hitFlash || 0) > 0 ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.38)';
+      ctx.clip();
+
+      const shine = ctx.createLinearGradient(-p.r * 0.95, -p.r * 0.95, p.r * 0.9, p.r * 0.9);
+      shine.addColorStop(0, 'rgba(255,255,255,0.46)');
+      shine.addColorStop(0.32, 'rgba(255,255,255,0.12)');
+      shine.addColorStop(0.55, 'rgba(255,255,255,0)');
+      shine.addColorStop(0.82, 'rgba(255,255,255,0.08)');
+      shine.addColorStop(1, 'rgba(255,255,255,0.18)');
+      ctx.fillStyle = shine;
+      ctx.fillRect(-p.r * 1.25, -p.r * 1.2, p.r * 2.5, p.r * 2.4);
+
+      ctx.globalCompositeOperation = 'multiply';
+      const underside = ctx.createLinearGradient(0, -p.r * 0.2, 0, p.r * 1.25);
+      underside.addColorStop(0, 'rgba(0,0,0,0)');
+      underside.addColorStop(1, 'rgba(0,0,0,0.22)');
+      ctx.fillStyle = underside;
+      ctx.fillRect(-p.r * 1.2, -p.r * 1.2, p.r * 2.4, p.r * 2.4);
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.ellipse(-p.r * 0.3, -p.r * 0.42, p.r * 0.36, p.r * 0.14, -0.52, 0, TAU);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(p.r * 0.08, -p.r * 0.08, p.r * 0.16, p.r * 0.06, -0.2, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+
+      ctx.save();
+      this.traceBlobPath(ctx, p, 1);
+      ctx.strokeStyle = (p.hitFlash || 0) > 0 ? 'rgba(255,255,255,0.96)' : 'rgba(255,255,255,0.42)';
       ctx.lineWidth = 2.5 + (p.hitFlash || 0) * 5;
       ctx.stroke();
-      ctx.fillStyle = 'rgba(255,255,255,0.58)';
-      ctx.beginPath();
-      ctx.ellipse(-p.r * 0.33, -p.r * 0.42, p.r * 0.24, p.r * 0.13, -0.55, 0, TAU);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,0.18)';
-      ctx.beginPath();
-      ctx.ellipse(p.r * 0.18, p.r * 0.22, p.r * 0.46, p.r * 0.18, 0.4, 0, TAU);
-      ctx.fill();
-      if ((p.boostPulse || 0) > 0.02) {
-        ctx.globalAlpha = 0.8;
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 3;
-        for (let i = 0; i < 2; i++) {
+      ctx.restore();
+
+      if (aura > 0.02) {
+        ctx.save();
+        ctx.globalAlpha = 0.28 + aura * 0.24;
+        ctx.strokeStyle = rgba(p.color, 0.88);
+        ctx.lineWidth = Math.max(3, p.r * 0.12);
+        for (let i = 0; i < 3; i++) {
+          const r = p.r * (1.12 + i * 0.14 + Math.sin(t * 7 + i) * 0.02);
           ctx.beginPath();
-          ctx.arc(0, 0, p.r + 5 + i * 5 + Math.sin(t * 4) * 2, -0.8, 0.8);
+          ctx.arc(0, 0, r, -0.8, 0.75);
           ctx.stroke();
         }
+        ctx.restore();
       }
       ctx.restore();
 
@@ -2699,10 +2871,44 @@
         const a = p.life / p.maxLife;
         if (foreground !== (p.size > 9)) continue;
         ctx.globalAlpha = a * p.alpha;
+        if (p.glow) {
+          ctx.shadowColor = rgba(p.color, 0.55);
+          ctx.shadowBlur = p.size * (0.9 + p.glow * 1.8);
+        }
         ctx.fillStyle = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size * (0.45 + a * 0.8), 0, TAU);
-        ctx.fill();
+        if (p.shape === 'droplet') {
+          const ang = Math.atan2(p.vy || 0, p.vx || 0) + (p.rot || 0) * 0.12;
+          const len = p.size * (p.stretch || 1.7) * (0.65 + (1 - a) * 0.65);
+          const wid = p.size * (0.6 + a * 0.25);
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(ang);
+          ctx.beginPath();
+          ctx.moveTo(len * 0.55, 0);
+          ctx.quadraticCurveTo(len * 0.12, wid * 0.9, -len * 0.55, 0);
+          ctx.quadraticCurveTo(len * 0.12, -wid * 0.9, len * 0.55, 0);
+          ctx.fill();
+          if (p.highlight) {
+            ctx.globalAlpha *= 0.45;
+            ctx.fillStyle = 'rgba(255,255,255,0.9)';
+            ctx.beginPath();
+            ctx.ellipse(len * 0.08, -wid * 0.18, len * 0.2, wid * 0.16, 0, 0, TAU);
+            ctx.fill();
+          }
+          ctx.restore();
+        } else {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size * (0.45 + a * 0.8), 0, TAU);
+          ctx.fill();
+          if (p.highlight) {
+            ctx.globalAlpha *= 0.33;
+            ctx.fillStyle = 'rgba(255,255,255,0.9)';
+            ctx.beginPath();
+            ctx.arc(p.x - p.size * 0.16, p.y - p.size * 0.18, p.size * 0.22, 0, TAU);
+            ctx.fill();
+          }
+        }
+        if (p.glow) ctx.shadowBlur = 0;
       }
       ctx.restore();
     }
@@ -2711,10 +2917,15 @@
       for (const s of this.shockwaves) {
         const a = clamp(s.life / s.maxLife, 0, 1);
         ctx.globalAlpha = a * 0.82;
-        ctx.strokeStyle = rgba(s.color, 0.9);
-        ctx.lineWidth = 5 * a;
+        ctx.strokeStyle = rgba(s.color, 0.92);
+        ctx.lineWidth = 4 + 4 * a;
         ctx.beginPath();
-        ctx.arc(s.x, s.y, s.radius * (1.1 - a * 0.6), 0, TAU);
+        ctx.arc(s.x, s.y, s.radius * (1.1 - a * 0.58), 0, TAU);
+        ctx.stroke();
+        ctx.globalAlpha = a * 0.22;
+        ctx.lineWidth = 10 * a;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.radius * (0.72 + (1 - a) * 0.4), 0, TAU);
         ctx.stroke();
       }
       ctx.restore();
