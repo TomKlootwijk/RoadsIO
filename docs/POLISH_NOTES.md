@@ -45,16 +45,63 @@ These are intentionally conservative. The round flow and host-authoritative arch
 ### Performance guardrails
 - Cosmetic ripples, caustic blob highlights, extra particle density, and high-detail blob meshes are disabled or reduced in Low quality and automatically throttled when Auto quality detects low FPS.
 
-## 0.4.x deep polish pass
+## 0.5.0 ultra-juice polish pass
 
-### Visual feedback
-- Wet ink ripples now render with a darker depth pass and a screen-highlight pass.
-- Paint borders use stronger directional rim/underside shading while keeping the existing ownership grid.
-- Enemy paint conversion now emits tiny color-shifting ink peel flecks.
-- Blob bodies react to collision direction, get stronger internal caustic strokes, and show a wet boost rim.
-- Boosting and splats add subtle camera zoom pulses; round wins add a color flash and capped confetti droplets.
+### Scope boundary
+- This pass is intentionally cosmetic-only.
+- No movement constants, paint/scoring rules, splat thresholds, bot behavior, round timing, room flow, signaling protocol, or compatibility key were changed.
 
-### Audio/UI
-- Procedural music now ducks briefly under splats and round-end cues.
-- Paint, conversion, boost, bump, and splat sounds were rebalanced softer and less beepy.
-- Leaderboard, boost meter, room lobby, buttons, and joystick gained feedback-only polish with no layout or control changes.
+### New visual juice
+- Added boost speed streaks and subtle blob afterimages.
+- Added spark bursts for combo pops, wall taps, splats, and winner celebrations.
+- Added winner confetti and a score-leader crown.
+- Added a minimap viewport outline.
+- Added stronger arena depth: background texture, wet-ink shimmer, glints, and vignette.
+- Added a richer round/winner banner treatment.
+
+### Interface polish
+- Improved menu glass, logo shine, button sweeps, HUD legibility, boost meter sheen, touch-control glass, and keyboard focus visibility.
+- Added reduced-motion CSS guardrails for users who prefer less animation.
+
+### Audio polish
+- Added round-start, wall-bump, combo-pop, and celebration layers to the existing procedural audio system.
+
+### Performance guardrails
+- New cosmetic effects are reduced or skipped by Low quality and by Auto quality when FPS falls.
+
+## 0.5.1 optimized-juice polish pass
+
+Presentation/performance pass only; gameplay mechanics remain unchanged.
+
+- Cached static canvas backdrop/vignette work to reduce full-screen per-frame gradient cost.
+- Throttled HUD leaderboard rebuilds and minimap refreshes.
+- Added off-screen FX culling and in-place FX list compaction.
+- Reduced splat screen shake while preserving impact through softer flash, particles, and shockwaves.
+- Replaced gameplay HUD backdrop blur with a cheaper glass treatment.
+
+
+## 0.6.0 ultra-optimized juice pass
+
+This pass keeps the existing rules intact while making the game feel faster, clearer, and more responsive.
+
+### New feedback loops
+- RUSH streaks reward continuous painting with an escalating HUD badge, pop text, shockwaves, spark bursts, flash, and procedural audio.
+- Lead changes now announce themselves with a short banner, toast, sparkle burst, and screen feedback.
+- The last 10 seconds now create an endgame pulse with timer styling, countdown banners, audio ticks, and urgency flashes.
+- High-speed play gains screen-space rush streaks, while nearby off-screen threats get edge arrows.
+
+### Performance improvements
+- Paint rendering now caches falloff, world-coordinate, wet/deep/gloss, grain, and sparkle data.
+- Dirty paint/network delta queues use cursor consumption rather than repeated array slicing.
+- Save-Data and reduced-motion preferences automatically trim DPR and expensive cosmetic layers.
+
+### Compatibility boundaries
+- No changes to the stable signaling compatibility key.
+- No changes to movement constants, win condition, scoring rules, or round length.
+
+## 0.6.0 merge retention note
+
+- Merged the ultra-juice optimized pass onto the local deep-polish work rather than replacing it wholesale.
+- Retained deep wet-ripple depth/highlight rendering, directional paint rims, conversion flecks, impact-biased jello visuals, camera pulses, music ducking, and current-player HUD glow.
+- Kept the incoming RUSH streaks, lead-change feedback, final-countdown urgency, speed streaks, threat arrows, cached paint hot paths, and optimized FX budgets.
+- Signaling compatibility remains `roads-splash-io-v1`.
