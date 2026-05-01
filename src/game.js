@@ -9,9 +9,10 @@
    */
 
   const CONFIG = {
-    VERSION: '0.2.17-renegotiate-stuck-join',
+    VERSION: '0.2.18-stable-room-compat',
     SIGNALING_URL: 'https://runevalesignaling.onrender.com',
     SIGNALING_MODE: 'http', // RuneVale HTTP long-poll signaling mailbox
+    SIGNALING_GAME_VERSION: 'roads-splash-io-v1',
     SIGNALING_CONTENT_HASH: 'roads-splash-io-v1',
 
     WORLD_W: 1680,
@@ -896,7 +897,7 @@
           hostName: this.name,
           visibility: 'public',
           maxPeers: Math.min(8, CONFIG.MAX_PLAYERS),
-          gameVersion: CONFIG.VERSION,
+          gameVersion: CONFIG.SIGNALING_GAME_VERSION,
           contentHash: CONFIG.SIGNALING_CONTENT_HASH
         }
       });
@@ -914,7 +915,7 @@
         body: {
           peerId: this.id,
           displayName: this.name,
-          gameVersion: CONFIG.VERSION,
+          gameVersion: CONFIG.SIGNALING_GAME_VERSION,
           contentHash: CONFIG.SIGNALING_CONTENT_HASH
         }
       });
@@ -931,7 +932,7 @@
         body: {
           peerId: this.id,
           displayName: this.name,
-          gameVersion: CONFIG.VERSION,
+          gameVersion: CONFIG.SIGNALING_GAME_VERSION,
           contentHash: CONFIG.SIGNALING_CONTENT_HASH
         }
       });
@@ -1134,6 +1135,22 @@
       }
       return state;
     }
+    maintainHostNegotiations() {
+      if (!this.isHost) return;
+      const t = now();
+      for (const [id, peer] of Array.from(this.peers.entries())) {
+        if (!peer || peer.open) continue;
+        const age = t - (peer.createdAt || t);
+        if (peer.pc?.localDescription?.type === 'offer' && t - (peer.lastOfferAt || 0) > 1200) {
+          peer.lastOfferAt = t;
+          this.signal.sendSignal(id, 'offer', peer.pc.localDescription);
+        }
+        if (age > 7600) {
+          this.removePeer(id, true);
+          this.createPeer(id, true);
+        }
+      }
+    }
     attachDataChannel(peer, dc) {
       const isState = dc.label === 'roads-state';
       if (isState) peer.stateDc = dc;
@@ -1168,12 +1185,18 @@
       if (!from) return;
       let peer = this.peers.get(from);
       if (!peer) peer = this.createPeer(from, false);
-      const pc = peer.pc;
+      let pc = peer.pc;
       try {
         if (type === 'offer') {
-          if (pc.signalingState === 'stable' && pc.remoteDescription?.type === 'offer' && pc.localDescription?.type === 'answer') {
+          const sameOffer = pc.remoteDescription?.type === 'offer' && pc.remoteDescription.sdp === data?.sdp;
+          if (pc.signalingState === 'stable' && sameOffer && pc.localDescription?.type === 'answer') {
             this.signal.sendSignal(from, 'answer', pc.localDescription);
             return;
+          }
+          if (!peer.open && pc.remoteDescription && !sameOffer) {
+            this.removePeer(from, true);
+            peer = this.createPeer(from, false);
+            pc = peer.pc;
           }
           await pc.setRemoteDescription(new RTCSessionDescription(data));
           await this.flushPendingIce(peer);
@@ -1410,7 +1433,7 @@
       this.lobbyLoading = true;
       this.lastLobbyAt = t;
       this.renderLobby('loading');
-      const url = `${CONFIG.SIGNALING_URL}/rooms?gameVersion=${encodeURIComponent(CONFIG.VERSION)}&contentHash=${encodeURIComponent(CONFIG.SIGNALING_CONTENT_HASH)}&limit=20`;
+      const url = `${CONFIG.SIGNALING_URL}/rooms?gameVersion=${encodeURIComponent(CONFIG.SIGNALING_GAME_VERSION)}&contentHash=${encodeURIComponent(CONFIG.SIGNALING_CONTENT_HASH)}&limit=20`;
       try {
         const res = await fetch(url, { cache: 'no-store', mode: 'cors' });
         const data = await res.json().catch(() => ({}));
@@ -1542,7 +1565,7 @@
         this.toast('Connected to signaling. Waiting for host WebRTC data channel…', 4200);
       } catch (err) {
         this.hideModal();
-        this.toast('Could not join. Try again after the Render server wakes up.');
+        this.toast(`Could not join ${code}: ${String(err?.message || err)}`, 5200);
         this.leaveToMenu(false);
       }
     }
@@ -2419,6 +2442,7 @@
     }
     networkHost(dt) {
       if (!this.mesh) return;
+      this.mesh.maintainHostNegotiations();
       this.accumNet += dt;
       this.accumPaintNet += dt;
       this.accumFullGrid += dt;
