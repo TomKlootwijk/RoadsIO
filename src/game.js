@@ -25,6 +25,7 @@
 
     ROOM_CODE_LENGTH: 3,
     LOBBY_REFRESH_MS: 5000,
+    SIGNALING_HEARTBEAT_MS: 15000,
 
     BASE_RADIUS: 19,
     MAX_RADIUS_BONUS: 14,
@@ -999,6 +1000,7 @@
       this.cursor = 0;
       this.polling = false;
       this.pollAbort = null;
+      this.heartbeatTimer = null;
     }
     async connect(room, isHost = false) {
       this.room = room ? String(room).toUpperCase() : null;
@@ -1017,6 +1019,7 @@
         this.wakeSignalingServer();
         if (isHost) await this.createHttpRoom();
         else await this.joinHttpRoom(this.room);
+        this.startHeartbeat();
         clearTimeout(wakeTimer);
         return this.room;
       } catch (err) {
@@ -1030,6 +1033,7 @@
       }
     }
     close() {
+      this.stopHeartbeat();
       if (this.connected && this.room) {
         this.sendSignal(this.hostPeerId || '*', 'bye', { peerId: this.id }).catch(() => {});
       }
@@ -1038,6 +1042,22 @@
       this.connected = false;
       this.polling = false;
       this.pollAbort = null;
+    }
+    startHeartbeat() {
+      this.stopHeartbeat();
+      const beat = () => {
+        if (!this.connected || this.cancelled || !this.room) return;
+        this.fetchJson(`/rooms/${encodeURIComponent(this.room)}/heartbeat`, {
+          method: 'POST',
+          body: { peerId: this.id, hostName: this.name }
+        }).catch(() => {});
+      };
+      this.heartbeatTimer = setInterval(beat, CONFIG.SIGNALING_HEARTBEAT_MS);
+      setTimeout(beat, 1200);
+    }
+    stopHeartbeat() {
+      if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
     wakeSignalingServer() {
       if (!window.fetch) return;
@@ -1644,9 +1664,15 @@
       this.showGameUi();
       this.toast('Paint the most tiles before time runs out.');
     }
+    resetNetworkIdentity() {
+      this.myId = uid('me');
+      this.hostId = null;
+      this.lastClientHelloAt = 0;
+    }
     async startHost() {
       this.readMenuName();
       this.closeNetwork();
+      this.resetNetworkIdentity();
       const attempt = ++this.networkAttempt;
       this.isHost = true;
       this.roomCode = null;
@@ -1706,6 +1732,7 @@
       if (!code) { this.toast('Enter a room code first.'); return; }
       $('roomInput').value = code;
       this.closeNetwork();
+      this.resetNetworkIdentity();
       this.mode = 'client';
       this.isHost = false;
       this.roomCode = code;

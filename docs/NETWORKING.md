@@ -110,12 +110,13 @@ SIGNALING_MODE: 'http'
 SIGNALING_CONTENT_HASH: 'roads-splash-io-v1'
 ```
 
-The server lives at `C:\Users\Tom\Documents\CODEX Projects\RuneValeSignaling` during local development and exposes `/healthz`, `/rooms`, `/rooms/:roomCode/join`, and `/rooms/:roomCode/signals`.
+The server lives at `C:\Users\Tom\Documents\CODEX Projects\RuneValeSignaling` during local development and exposes `/healthz`, `/rooms`, `/rooms/:roomCode/join`, `/rooms/:roomCode/signals`, and `/rooms/:roomCode/heartbeat`.
 
 ## Known Networking Limitations
 
 - No TURN server is included. Some strict NAT/mobile networks may fail peer-to-peer WebRTC. Add a TURN provider for reliability.
 - Signaling mailbox responses now explicitly disable caching, and long-poll waiters are cleaned up if a polling client disconnects mid-request.
+- Hosts and clients send a lightweight heartbeat while in a room so one delayed long-poll does not make the server strand that browser's peer id.
 - The host is authoritative, so if the host leaves, the room ends. Host migration is not implemented.
 - Snapshots are JSON for readability. For larger rooms, switch paint deltas to binary packets.
 - The signaling mailbox is intentionally not a gameplay relay. If WebRTC cannot connect on a strict network, add TURN rather than sending gameplay through signaling.
